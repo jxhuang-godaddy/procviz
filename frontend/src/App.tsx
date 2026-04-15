@@ -1,11 +1,27 @@
+import { useState } from "react";
+import TreeSidebar from "./components/TreeSidebar";
+import type { ObjectType } from "./types/graph";
+
+interface Selection {
+  db: string;
+  objectType: ObjectType;
+  name: string;
+}
+
 export default function App() {
+  const [selection, setSelection] = useState<Selection | null>(null);
+
+  function handleSelect(db: string, objectType: ObjectType, name: string) {
+    setSelection({ db, objectType, name });
+  }
+
   return (
     <div className="flex h-screen bg-gray-50 text-gray-900">
-      <div className="w-56 border-r border-gray-200 bg-white p-3 text-sm">
-        Sidebar placeholder
-      </div>
+      <TreeSidebar onSelect={handleSelect} />
       <div className="flex-1 flex items-center justify-center text-gray-400">
-        Select a procedure or table to view its data flow
+        {selection
+          ? `Loading dataflow for ${selection.db}.${selection.name}...`
+          : "Select a procedure or table to view its data flow"}
       </div>
     </div>
   );
