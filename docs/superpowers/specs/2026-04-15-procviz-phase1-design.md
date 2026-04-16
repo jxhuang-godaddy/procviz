@@ -71,7 +71,7 @@ Pure functions — takes a DDL string, returns structured data. No DB dependency
   2. Detect DDL type: procedure (`_is_procedure_ddl`) or macro (`_is_macro_ddl`)
   3. For procedures: extract body between `BEGIN...END` via `_extract_procedure_body`
   4. For macros: extract body between `AS ( ... )` via `_extract_macro_body` (paren-depth-aware)
-  5. Split body into individual statements via `_split_statements` — returns `(text, char_offset)` tuples (handles `--` line comments, `/* */` block comments, quoted strings, `\r\n`/`\r`/`\n` normalization)
+  5. Split body into individual statements via `_split_statements` — returns `(text, char_offset, pos_map)` tuples. `pos_map` tracks each character's original body position through comment stripping, ensuring accurate line numbers. Handles `--` line comments, `/* */` block comments, quoted strings.
   6. Filter to DML statements via `_get_dml_statement_list` (skips SET/DECLARE/SIGNAL/COLLECT), preserving character offsets
   7. Parse each DML with `sqlglot.parse(sql, dialect="teradata", error_level=ErrorLevel.WARN)`
   8. Walk the AST for `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `CREATE`, `CALL` via `_process_statement`
@@ -105,18 +105,20 @@ Assembles Cytoscape JSON from parsed data using a 4-column dagre layout:
   - Source tables extracted from SELECT refs in the CREATE VIEW DDL
   - View node enriched with column metadata and DDL
 
-- `build_reverse_lookup_graph(table_name, all_dataflows, ddl_lookup) -> GraphResponse`
+- `build_reverse_lookup_graph(table_name, all_dataflows, ddl_lookup, db=None) -> GraphResponse`
   - 3-column layout: Writers (left) → Table (center) → Readers (right)
   - Write edges for INSERT/UPDATE/DELETE/MERGE/CREATE operations
   - Read edges for SELECT operations
   - Procedure nodes include DDL in detail (from `ddl_lookup` cache) so clicking shows source code
   - Case-insensitive table name matching
+  - Accepts `db` parameter to qualify procedure names with database prefix
+  - Tables with no readers/writers shown as standalone node (isolated table support)
 
 Step labels include source line numbers: `[1] INSERT / SELECT\nL#42`.
 
 ### Caching
 
-The table lineage (reverse lookup) requires parsing all procedures/macros in a database. Both parsed dataflow results and raw DDL text are cached together per-database in a single pass (`_ensure_db_cached`) to avoid double-fetching. The DDL cache enables procedure nodes in table diagrams to show source code on click. Cache invalidates on server restart — adequate for Phase 1.
+The table lineage (reverse lookup) requires parsing all procedures/macros in a database. Both parsed dataflow results and raw DDL text are cached together per-database in a single pass (`_ensure_db_cached`) to avoid double-fetching. The DDL cache enables procedure nodes in table diagrams to show source code on click. A `_db_fully_scanned` set tracks which databases have been completely scanned, distinguishing partial cache entries (populated by forward dataflow requests for individual procedures) from full database scans required for reverse lookup. Forward dataflow (`_forward_dataflow`) also caches DDL to `_ddl_cache`, ensuring consistency. Cache invalidates on server restart — adequate for Phase 1.
 
 ## Data Models (`models/schemas.py`)
 
@@ -196,9 +198,9 @@ class GraphResponse(BaseModel):
 
 Two-panel layout with floating overlays:
 
-1. **Tree sidebar** (left, ~220px, resizable) — collapsible tree: Database → Object Type → Object. Lazy-loads each level on expand. **Database filter** at top for case-insensitive name searching. **Object filter** appears per-object-type when the list exceeds 10 items for quick search within procedures, macros, tables, or views.
-2. **Diagram area** (center, fills remaining space) — Cytoscape.js canvas with dagre layout, `rankDir: LR`. Procedures/macros use 4-column layout (proc → inputs → steps → outputs). Views use 3-column layout (sources → CREATE VIEW step → view). Tables use 3-column layout (writers → table → readers). Initial zoom clamped to minimum 0.45 for large diagrams. Pan and zoom built in.
-3. **Detail modal** (floating, resizable/draggable) — appears on node/edge click. Shows SQL/DDL with syntax highlighting (keywords blue, functions purple, strings green, numbers orange, comments gray). Copy-to-clipboard button. Node-type-specific content:
+1. **Tree sidebar** (left, ~220px, resizable) — collapsible tree: Database → Object Type → Object. Lazy-loads each level on expand. **Database filter** at top for case-insensitive name searching. **Object filter** appears per-object-type when the list exceeds 10 items for quick search within procedures, macros, tables, or views. Auto-expands and syncs selection when external navigation occurs (e.g., double-click on a node).
+2. **Diagram area** (center, fills remaining space) — Cytoscape.js canvas with dagre layout, `rankDir: LR`. Procedures/macros use 4-column layout (proc → inputs → steps → outputs). Views use 3-column layout (sources → CREATE VIEW step → view). Tables use 3-column layout (writers → table → readers). Initial zoom clamped to minimum 0.45 for large diagrams. Pan and zoom built in. **Double-click** navigable nodes (procedure, macro, table, volatile, caller) to open that object's diagram. Single-tap delayed 250ms to disambiguate from double-tap.
+3. **Detail modal** (floating, resizable/draggable) — appears on single-click (after 250ms delay). Shows SQL/DDL with syntax highlighting (keywords blue, functions purple, strings green, numbers orange, comments gray) and **line number gutter**. DDL views use `preserveLines` mode for accurate line numbers matching external editors; step SQL uses formatted display. Copy-to-clipboard button. Node-type-specific content:
    - **Procedure/Macro**: full DDL definition
    - **SQL Step**: extracted DML statement
    - **Volatile Table**: CREATE statement from the creating step
@@ -206,7 +208,8 @@ Two-panel layout with floating overlays:
    - **Caller**: parameter list
    - **Edge**: source, target, type, step
 4. **Legend** (bottom-left overlay) — color legend with **visibility checkboxes** for each node type (Procedure/Macro, SQL Step, Table/View, Volatile Table, Called Procedure) and each edge type (Execution Flow, Read, Write). Toggling off a type hides those elements; edges connected to hidden nodes are auto-hidden; orphaned nodes with no remaining visible edges are auto-hidden.
-5. **Toolbar** (top-right overlay) — Fit / + / - zoom controls alongside the Export dropdown (PNG, JPG, PDF, HTML interactive viewer, JSON)
+5. **Diagram title** (top-left overlay) — shows `database / object name (type)` so the user always knows which diagram they are viewing
+6. **Toolbar** (top-right overlay) — Fit / + / - zoom controls alongside the Export dropdown (PNG, JPG, PDF, HTML interactive viewer, JSON)
 
 ### Component structure
 
@@ -360,9 +363,18 @@ The following features were added during Phase 1 development based on user feedb
 - **Diagram export** — PNG, JPG, PDF, HTML (interactive self-contained viewer), JSON (Cytoscape.js format)
 - **HTML export with interactivity** — node click shows SQL/DDL modal with syntax highlighting and copy-to-clipboard
 - **Source line numbers** — SQL step nodes show `L#42` indicating the DDL line number for easy source location
+- **Accurate line number tracking** — `pos_map` in `_split_statements` tracks each character's original body position through comment stripping; CRLF normalization happens before body extraction to prevent coordinate mismatches
+- **Line number gutter in detail modal** — `preserveLines` mode for DDL views shows original line numbers matching external editors; step SQL views use formatted display
 - **View data flow diagrams** — views render as forward data flow (source tables → CREATE VIEW step → view) instead of reverse lookup
 - **Table lineage diagrams** — tables show writers (left) → table (center) → readers (right), with DDL available on procedure node click
+- **SSE streaming progress for table diagrams** — real-time progress messages during database scanning (per-procedure/macro parsing progress), replacing generic "Loading..." message
+- **Isolated table support** — tables with no reader or writer procedures shown as standalone node instead of empty diagram
 - **Visibility toggles** — checkboxes for every node type and edge type; auto-hides dangling edges and orphaned nodes
 - **Consistent initial sizing** — uniform 12px font, minimum zoom clamped at 0.45 for large diagrams
+- **Conditional database prefix** — node labels include database prefix only when a diagram spans multiple databases (`_is_multi_db` / `_make_label` helpers)
+- **Double-click navigation** — double-click navigable nodes (procedure, macro, table, volatile, caller) to generate that object's diagram; sidebar auto-expands to reflect new selection
+- **Tap/dbltap disambiguation** — single-tap delayed 250ms so double-tap can cancel it, preventing accidental detail modal on navigation
+- **Diagram title overlay** — top-left overlay showing `database / object name (type)` for clear context
 - **Database filter** — case-insensitive text filter at top of navigation sidebar
 - **Object filter** — per-object-type filter for quick search within long object lists (appears when >10 items)
+- **Dual cache synchronization** — `_db_fully_scanned` set distinguishes partial cache (from forward dataflow) from complete database scans, preventing DDL cache misses on procedure nodes in table diagrams

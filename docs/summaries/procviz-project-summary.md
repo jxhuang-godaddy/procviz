@@ -22,21 +22,27 @@ Procviz is a locally-run web application that generates interactive flowchart an
 1. **Control flow diagram** — sequential flowchart of a single stored procedure's SPL logic (IF/ELSE branches, loops, SIGNAL, BT/ET scope) *(Phase 2)*
 2. **Data flow diagram (procedure/macro)** — which tables a procedure reads from and writes to, with operation type (SELECT/UPDATE/INSERT/CREATE), step order labels, and source line numbers (`L#123`)
 3. **Data flow diagram (view)** — source tables → CREATE VIEW step → view node, showing where the view's data comes from
-4. **Table lineage diagram** — procedures that write to the table (left) → table (center) → procedures that read from the table (right), with DDL available on procedure node click
+4. **Table lineage diagram** — procedures that write to the table (left) → table (center) → procedures that read from the table (right), with DDL available on procedure node click. Streams progress via SSE during initial database scan. Shows isolated tables (no readers/writers) as standalone nodes.
 5. **Multi-procedure dependency graph** — call tree and shared table view across a set of related procedures, with parallel branch support *(Phase 3)*
 
 ### Interaction
 - Click any node to see details in a **resizable, draggable modal** with SQL syntax highlighting (keywords, functions, strings, numbers, comments — all color-coded) and copy-to-clipboard
+- **Line number gutter** in detail modal — DDL views use `preserveLines` mode showing original line numbers; step SQL views use formatted display
 - Procedure/macro nodes show full DDL definition
 - SQL step nodes show the extracted DML statement with source line number (`L#123`)
 - Volatile table nodes show the CREATE statement from the step that creates them
 - Table/view nodes fetch and display DDL from Teradata via SHOW TABLE/VIEW
+- **Double-click navigation** — double-click any procedure, macro, table, volatile table, or called procedure node to navigate to that object's own diagram. Sidebar auto-expands to reflect the new selection.
+- **Diagram title** — overlay in top-left showing `database / object name (type)` so the user always knows which object they are viewing
 - **Zoom toolbar** — Fit (fit entire diagram to screen), + (zoom in), - (zoom out) buttons in the top-right of the diagram pane
 - Pan and zoom (built into Cytoscape.js)
 - Node labels auto-sized to fit full text (no truncation)
+- **Conditional database prefix** — node labels include database prefix only when a diagram spans multiple databases, keeping labels concise for single-database diagrams
 - **Visibility toggles** — checkboxes in the legend to show/hide each node type (Procedure/Macro, SQL Step, Table/View, Volatile Table, Called Procedure) and each edge type (Execution Flow, Read, Write). Hidden nodes automatically hide their connected edges; orphaned nodes with no remaining visible edges are auto-hidden.
 - **Database filter** — text input at the top of the sidebar for case-insensitive name filtering across all databases
 - **Object filter** — per-object-type text filter that appears when a list has more than 10 items, enabling quick search within procedures, macros, tables, or views
+- **SSE streaming progress** — table diagram generation shows real-time progress (scanning procedures, parsing macros, building graph) instead of a generic loading message
+- **Isolated table support** — tables with no reader or writer procedures are shown as a standalone node instead of an empty diagram
 - Minimap for large graphs *(Phase 4)*
 - Inline step number override when auto-detection is insufficient *(Phase 4)*
 
@@ -310,11 +316,12 @@ react, react-dom — UI framework
 4. Enrich view node with column metadata from `DBC.ColumnsV`
 
 ### Table lineage (reverse lookup)
-1. Parse all procedures/macros in the database (cached in-memory along with DDL text)
+1. Parse all procedures/macros in the database via SSE streaming (progress messages sent per-object during initial scan; cached in-memory along with DDL text for subsequent requests)
 2. Find all references to the target table (case-insensitive matching)
-3. Build graph: writers (left) → table (center) → readers (right)
+3. Build graph: writers (left) → table (center) → readers (right). Tables with no readers/writers are shown as a standalone node.
 4. Procedure nodes include DDL in their detail so clicking shows source code
 5. Enrich center node with column metadata from `DBC.ColumnsV`
+6. `_db_fully_scanned` set tracks which databases have been completely scanned, distinguishing partial cache (from forward dataflow) from full scans
 
 ### Multi-procedure *(Phase 3)*
 1. For each procedure, run single-procedure parsing
@@ -374,6 +381,14 @@ react, react-dom — UI framework
 - Visibility toggles for all node types and edge types with auto-hiding of orphaned nodes
 - Database filter and per-object-type filter in navigation sidebar
 - Consistent 12px font sizing with minimum zoom clamping for large diagrams
+- Line number gutter in detail modal with `preserveLines` mode for DDL views
+- Accurate SQL step line numbers via `pos_map` tracking through comment stripping and CRLF normalization
+- Conditional database prefix on node labels (only when diagram spans multiple databases)
+- SSE streaming progress for table diagram generation with real-time status messages
+- Isolated table support (tables with no readers/writers shown as standalone node)
+- Double-click navigation on nodes to generate that object's diagram with sidebar auto-sync
+- Tap/dbltap disambiguation via 250ms delay to prevent double-click from triggering single-click
+- Diagram title overlay showing database, object name, and type
 - `.env` credential loading
 - `install.sh` / `start.sh`
 
