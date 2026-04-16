@@ -17,6 +17,22 @@ def _step_label(step: int) -> str:
     return f"[{step}]"
 
 
+def _is_multi_db(names: list[str]) -> bool:
+    """Return True if names span more than one database prefix."""
+    dbs: set[str] = set()
+    for name in names:
+        parts = name.split(".")
+        dbs.add(parts[0].lower() if len(parts) > 1 else "")
+    return len(dbs) > 1
+
+
+def _make_label(name: str, multi_db: bool) -> str:
+    """Return full qualified name if multi-db, otherwise just the short name."""
+    if multi_db:
+        return name
+    return name.split(".")[-1]
+
+
 def _edge_type_for_operation(operation: str) -> str:
     """Map DML operation to edge type."""
     if operation == "SELECT":
@@ -74,12 +90,18 @@ def build_dataflow_graph(
         """Return node type: 'volatile' for volatile tables, 'table' otherwise."""
         return "volatile" if name.lower() in volatile_lower else "table"
 
+    # Detect whether the diagram spans multiple databases
+    all_names = [obj_name]
+    all_names.extend(ref.name for ref in dataflow.table_refs)
+    all_names.extend(call.target for call in dataflow.call_refs)
+    multi_db = _is_multi_db(all_names)
+
     # --- Col 0: Procedure / macro node ---
     center_type = obj_type if obj_type in ("proc", "macro") else "proc"
     nodes.append(
         CytoscapeNode(
             id=obj_name,
-            label=obj_name.split(".")[-1],
+            label=_make_label(obj_name, multi_db),
             type=center_type,
             detail=detail_data,
         )
@@ -133,7 +155,7 @@ def build_dataflow_graph(
                 nodes.append(
                     CytoscapeNode(
                         id=node_id,
-                        label=node_id.split(".")[-1],
+                        label=_make_label(node_id, multi_db),
                         type=_table_type(node_id),
                         detail={},
                     )
@@ -173,7 +195,7 @@ def build_dataflow_graph(
                 nodes.append(
                     CytoscapeNode(
                         id=node_id,
-                        label=node_id.split(".")[-1],
+                        label=_make_label(node_id, multi_db),
                         type=_table_type(node_id),
                         detail={},
                     )
@@ -198,7 +220,7 @@ def build_dataflow_graph(
                 nodes.append(
                     CytoscapeNode(
                         id=node_id,
-                        label=node_id.split(".")[-1],
+                        label=_make_label(node_id, multi_db),
                         type="caller",
                         detail={},
                     )
@@ -251,7 +273,10 @@ def build_view_graph(
 
     # The view node — use the explicit CREATE target if available, else the passed name
     view_id = create_refs[0].name if create_refs else view_name
-    short_label = view_id.split(".")[-1]
+
+    # Detect whether the diagram spans multiple databases
+    all_names = [view_id] + [r.name for r in source_refs]
+    multi_db = _is_multi_db(all_names)
 
     # Determine the DDL text for the step node
     ddl_text = detail_data.get("ddl", "")
@@ -273,7 +298,7 @@ def build_view_graph(
     nodes.append(
         CytoscapeNode(
             id=view_id,
-            label=short_label,
+            label=_make_label(view_id, multi_db),
             type="table",
             detail=detail_data,
         )
@@ -298,7 +323,7 @@ def build_view_graph(
             nodes.append(
                 CytoscapeNode(
                     id=node_id,
-                    label=node_id.split(".")[-1],
+                    label=_make_label(node_id, multi_db),
                     type="table",
                     detail={},
                 )
@@ -322,11 +347,13 @@ def build_reverse_lookup_graph(
     table_name: str,
     all_dataflows: dict[str, DataFlowResult],
     ddl_lookup: dict[str, str] | None = None,
+    db: str | None = None,
 ) -> GraphResponse:
     """Build Cytoscape JSON for a table's data-flow diagram.
 
     Layout: writers (left) → table (center) → readers (right).
     Procedure nodes include DDL in their detail so clicking shows source code.
+    *db* is the database name used to qualify unqualified proc names.
     """
     nodes: list[CytoscapeNode] = []
     edges: list[CytoscapeEdge] = []
@@ -334,11 +361,22 @@ def build_reverse_lookup_graph(
     table_lower = table_name.lower()
     ddl_lookup = ddl_lookup or {}
 
+    # Collect all proc names that reference this table, then detect multi-db
+    matching_procs: list[str] = []
+    for proc_name, dataflow in all_dataflows.items():
+        refs = [r for r in dataflow.table_refs if r.name.lower() == table_lower]
+        if refs:
+            qualified = f"{db}.{proc_name}" if db and "." not in proc_name else proc_name
+            matching_procs.append(qualified)
+
+    all_names = [table_name] + matching_procs
+    multi_db = _is_multi_db(all_names)
+
     # The table node (center)
     nodes.append(
         CytoscapeNode(
             id=table_name,
-            label=table_name.split(".")[-1],
+            label=_make_label(table_name, multi_db),
             type="table",
             detail={},
         )
@@ -357,25 +395,26 @@ def build_reverse_lookup_graph(
         if not write_refs and not read_refs:
             continue
 
-        if proc_name not in seen_nodes:
+        qualified_proc = f"{db}.{proc_name}" if db and "." not in proc_name else proc_name
+        if qualified_proc not in seen_nodes:
             proc_detail: dict = {}
             if proc_name in ddl_lookup:
                 proc_detail["ddl"] = ddl_lookup[proc_name]
             nodes.append(
                 CytoscapeNode(
-                    id=proc_name,
-                    label=proc_name.split(".")[-1],
+                    id=qualified_proc,
+                    label=_make_label(qualified_proc, multi_db),
                     type="proc",
                     detail=proc_detail,
                 )
             )
-            seen_nodes.add(proc_name)
+            seen_nodes.add(qualified_proc)
 
         for ref in write_refs:
             step_str = _step_label(ref.step)
             edges.append(
                 CytoscapeEdge(
-                    source=proc_name,
+                    source=qualified_proc,
                     target=table_name,
                     type="write",
                     step=step_str,
@@ -388,7 +427,7 @@ def build_reverse_lookup_graph(
             edges.append(
                 CytoscapeEdge(
                     source=table_name,
-                    target=proc_name,
+                    target=qualified_proc,
                     type="read",
                     step=step_str,
                     label=f"{step_str} {ref.operation}",

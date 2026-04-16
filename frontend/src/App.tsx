@@ -34,7 +34,7 @@ export default function App() {
     }));
   }, []);
 
-  const { graph, loading, error } = useDataflow(
+  const { graph, loading, error, progress } = useDataflow(
     selection?.db ?? null,
     selection?.objectType ?? null,
     selection?.name ?? null
@@ -57,7 +57,9 @@ export default function App() {
         )}
         {loading && (
           <div className="flex items-center justify-center h-full text-gray-400">
-            Loading...
+            <div className="text-center">
+              <div>{progress ?? "Loading..."}</div>
+            </div>
           </div>
         )}
         {error && (

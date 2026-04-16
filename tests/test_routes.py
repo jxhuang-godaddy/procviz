@@ -1,3 +1,4 @@
+import json
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -68,10 +69,20 @@ def test_dataflow_table_reverse_lookup(mock_td):
     mock_td.get_columns.return_value = [
         ColumnInfo(name="id", data_type="INTEGER", nullable=False),
     ]
+    # Clear cached state so the SSE scan runs
+    from api.routes import _db_fully_scanned, _dataflow_cache, _ddl_cache
+    _db_fully_scanned.discard("db")
+    _dataflow_cache.pop("db", None)
+    _ddl_cache.pop("db", None)
+
     resp = client.get("/api/databases/db/table/orders/dataflow")
     assert resp.status_code == 200
-    data = resp.json()
-    assert "nodes" in data
+    # Response is SSE; parse the last event which contains the result
+    lines = resp.text.strip().split("\n")
+    data_lines = [l for l in lines if l.startswith("data: ")]
+    last_event = json.loads(data_lines[-1].removeprefix("data: "))
+    assert last_event["type"] == "result"
+    assert "nodes" in last_event["graph"]
 
 
 @patch("api.routes.teradata")

@@ -237,12 +237,14 @@ const DiagramView = forwardRef<DiagramHandle, DiagramViewProps>(function Diagram
     });
 
     // Pass 3 — hide nodes that have no remaining visible non-hidden edges
-    // (skip the root proc/macro node which should always stay visible if its type is on)
+    // Skip root proc/macro nodes and nodes with no edges at all (intentionally isolated)
     cy.nodes().forEach((node) => {
       if (node.style("display") === "none") return;
       const nodeType = node.data("type") as string;
       if (nodeType === "proc" || nodeType === "macro") return;
-      const hasVisibleEdge = node.connectedEdges().not(".hidden").some(
+      const realEdges = node.connectedEdges().not(".hidden");
+      if (realEdges.length === 0) return; // intentionally isolated node
+      const hasVisibleEdge = realEdges.some(
         (edge) => edge.style("display") !== "none",
       );
       if (!hasVisibleEdge) {

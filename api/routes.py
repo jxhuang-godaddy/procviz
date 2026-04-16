@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import json
+from collections.abc import Generator
+
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 
 from connectors import teradata
 from graph.builder import build_dataflow_graph, build_reverse_lookup_graph, build_view_graph
@@ -58,7 +62,7 @@ def get_dataflow(db: str, object_type: str, name: str) -> GraphResponse:
         raise HTTPException(status_code=400, detail=f"Invalid object type: {object_type}")
 
     if object_type == "table":
-        return _reverse_lookup(db, name, object_type)
+        return _reverse_lookup_sse(db, name)
 
     if object_type == "view":
         return _view_dataflow(db, name)
@@ -111,20 +115,45 @@ def _view_dataflow(db: str, name: str) -> GraphResponse:
     return build_view_graph(f"{db}.{name}", dataflow, detail_data)
 
 
-def _reverse_lookup(db: str, name: str, object_type: str) -> GraphResponse:
-    """Build reverse-lookup graph for a table."""
-    _ensure_db_cached(db)
+def _reverse_lookup_sse(db: str, name: str) -> StreamingResponse:
+    """Build reverse-lookup graph for a table, streaming progress via SSE."""
 
-    columns = teradata.get_columns(db, name)
+    def _generate() -> Generator[str, None, None]:
+        already_cached = db in _db_fully_scanned
 
-    qualified_name = f"{db}.{name}"
-    graph = build_reverse_lookup_graph(
-        qualified_name, _dataflow_cache[db], _ddl_cache.get(db, {}),
-    )
+        if not already_cached:
+            _dataflow_cache.setdefault(db, {})
+            _ddl_cache.setdefault(db, {})
+            for otype in ("procedure", "macro"):
+                objects = teradata.get_objects(db, otype)
+                total = len(objects)
+                label = "procedures" if otype == "procedure" else "macros"
+                if total > 0:
+                    yield f"data: {json.dumps({'type': 'progress', 'phase': otype, 'current': 0, 'total': total, 'message': f'Scanning {total} {label}...'})}\n\n"
+                for idx, obj in enumerate(objects, 1):
+                    yield f"data: {json.dumps({'type': 'progress', 'phase': otype, 'current': idx, 'total': total, 'message': f'Parsing {label}: {obj.name} ({idx}/{total})'})}\n\n"
+                    if obj.name not in _dataflow_cache[db]:
+                        ddl = teradata.get_ddl(db, obj.name)
+                        if ddl:
+                            _ddl_cache[db][obj.name] = ddl
+                            _dataflow_cache[db][obj.name] = parse_dataflow(ddl)
+            _db_fully_scanned.add(db)
 
-    # Enrich center node with column data
-    for node in graph.nodes:
-        if node.id == qualified_name:
-            node.detail = {"columns": [c.model_dump() for c in columns]}
+            yield f"data: {json.dumps({'type': 'progress', 'phase': 'graph', 'message': 'Building graph...'})}\n\n"
+        else:
+            _ensure_db_cached(db)
 
-    return graph
+        columns = teradata.get_columns(db, name)
+        qualified_name = f"{db}.{name}"
+        graph = build_reverse_lookup_graph(
+            qualified_name, _dataflow_cache[db], _ddl_cache.get(db, {}), db=db,
+        )
+
+        # Enrich center node with column data
+        for node in graph.nodes:
+            if node.id == qualified_name:
+                node.detail = {"columns": [c.model_dump() for c in columns]}
+
+        yield f"data: {json.dumps({'type': 'result', 'graph': graph.model_dump()})}\n\n"
+
+    return StreamingResponse(_generate(), media_type="text/event-stream")
