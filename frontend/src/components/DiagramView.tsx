@@ -185,8 +185,15 @@ const DiagramView = forwardRef<DiagramHandle, DiagramViewProps>(function Diagram
       } as any,
     });
 
+    // Delay single-tap so double-tap can cancel it
+    let tapTimer: ReturnType<typeof setTimeout> | null = null;
+
     cy.on("tap", "node", (evt: EventObject) => {
-      onSelectRef.current({ kind: "node", data: evt.target.data() as CytoscapeNodeData });
+      if (tapTimer) clearTimeout(tapTimer);
+      tapTimer = setTimeout(() => {
+        tapTimer = null;
+        onSelectRef.current({ kind: "node", data: evt.target.data() as CytoscapeNodeData });
+      }, 250);
     });
 
     cy.on("tap", "edge", (evt: EventObject) => {
@@ -202,6 +209,7 @@ const DiagramView = forwardRef<DiagramHandle, DiagramViewProps>(function Diagram
 
     // Double-click navigable nodes to open their own diagram
     cy.on("dbltap", "node", (evt: EventObject) => {
+      if (tapTimer) { clearTimeout(tapTimer); tapTimer = null; }
       const nav = onNavigateRef.current;
       if (!nav) return;
       const data = evt.target.data() as CytoscapeNodeData;
