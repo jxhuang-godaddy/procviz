@@ -14,6 +14,8 @@ export default function TreeSidebar({ onSelect }: TreeSidebarProps) {
   const [expandedDbs, setExpandedDbs] = useState<Set<string>>(new Set());
   const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(null);
+  const [dbFilter, setDbFilter] = useState("");
+  const [objFilters, setObjFilters] = useState<Record<string, string>>({});
   const [width, setWidth] = useState(224);
   const dragging = useRef(false);
 
@@ -72,16 +74,27 @@ export default function TreeSidebar({ onSelect }: TreeSidebarProps) {
     onSelect(db, objType, name);
   }
 
+  const filterLower = dbFilter.toLowerCase();
+  const filteredDatabases = filterLower
+    ? databases.filter((db) => db.toLowerCase().includes(filterLower))
+    : databases;
+
   if (dbLoading) return <div className="p-3 text-sm text-gray-400">Loading databases...</div>;
   if (error) return <div className="p-3 text-sm text-red-500">Error: {error}</div>;
 
   return (
     <div className="flex flex-shrink-0" style={{ width }}>
       <div className="flex-1 border-r border-gray-200 bg-white overflow-y-auto overflow-x-hidden text-sm">
-        <div className="px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">
-          Databases
+        <div className="px-3 py-2">
+          <input
+            type="text"
+            placeholder="Filter databases..."
+            value={dbFilter}
+            onChange={(e) => setDbFilter(e.target.value)}
+            className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:border-purple-400"
+          />
         </div>
-        {databases.map((db) => (
+        {filteredDatabases.map((db) => (
           <div key={db}>
             <button
               className="flex items-center gap-1 w-full px-3 py-1 hover:bg-gray-50 text-left"
@@ -110,24 +123,45 @@ export default function TreeSidebar({ onSelect }: TreeSidebarProps) {
                   <span className="truncate">{objType}</span>
                 </button>
 
-                {expandedTypes.has(`${db}/${objType}`) &&
-                  objects[`${db}/${objType}`]?.map((obj) => {
-                    const key = `${db}/${objType}/${obj.name}`;
-                    return (
-                      <button
-                        key={obj.name}
-                        className={`block w-full text-left ml-8 px-2 py-1 rounded text-xs truncate ${
-                          selected === key
-                            ? "bg-purple-600 text-white"
-                            : "text-gray-600 hover:bg-gray-100"
-                        }`}
-                        title={obj.name}
-                        onClick={() => handleSelect(db, objType as ObjectType, obj.name)}
-                      >
-                        {obj.name}
-                      </button>
-                    );
-                  })}
+                {expandedTypes.has(`${db}/${objType}`) && (() => {
+                  const typeKey = `${db}/${objType}`;
+                  const allObjs = objects[typeKey] ?? [];
+                  const filterVal = (objFilters[typeKey] ?? "").toLowerCase();
+                  const filtered = filterVal
+                    ? allObjs.filter((o) => o.name.toLowerCase().includes(filterVal))
+                    : allObjs;
+                  return (
+                    <>
+                      {allObjs.length > 10 && (
+                        <input
+                          type="text"
+                          placeholder={`Filter ${objType}s...`}
+                          value={objFilters[typeKey] ?? ""}
+                          onChange={(e) => setObjFilters((prev) => ({ ...prev, [typeKey]: e.target.value }))}
+                          className="ml-8 mr-2 mt-1 px-2 py-0.5 text-xs border border-gray-300 rounded focus:outline-none focus:border-purple-400"
+                          style={{ width: "calc(100% - 2.5rem)" }}
+                        />
+                      )}
+                      {filtered.map((obj) => {
+                        const key = `${db}/${objType}/${obj.name}`;
+                        return (
+                          <button
+                            key={obj.name}
+                            className={`block w-full text-left ml-8 px-2 py-1 rounded text-xs truncate ${
+                              selected === key
+                                ? "bg-purple-600 text-white"
+                                : "text-gray-600 hover:bg-gray-100"
+                            }`}
+                            title={obj.name}
+                            onClick={() => handleSelect(db, objType as ObjectType, obj.name)}
+                          >
+                            {obj.name}
+                          </button>
+                        );
+                      })}
+                    </>
+                  );
+                })()}
               </div>
             ))}
           </div>

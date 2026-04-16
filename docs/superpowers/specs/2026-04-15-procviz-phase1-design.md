@@ -44,8 +44,9 @@ Three-level drill-down: **Database → Object Type → Object**
 
 ### Data flow behavior by object type
 
-- **Procedures / macros:** sqlglot-parsed data flow diagram showing which tables are read from and written to, with DML operation types and step numbers
-- **Tables / views:** Reverse-lookup diagram — all procedures/macros that reference this table, centered on the table node. Built by scanning all parsed procedures in the same database.
+- **Procedures / macros:** sqlglot-parsed data flow diagram showing which tables are read from and written to, with DML operation types, step numbers, and source line numbers (`L#123`)
+- **Views:** Forward data flow diagram — source tables → CREATE VIEW step → view node. Shows where the view's data comes from.
+- **Tables:** Lineage diagram — procedures that write to the table (left) → table (center) → procedures that read from the table (right). Procedure nodes include DDL so clicking shows source code.
 
 ## Backend Components
 
@@ -70,12 +71,13 @@ Pure functions — takes a DDL string, returns structured data. No DB dependency
   2. Detect DDL type: procedure (`_is_procedure_ddl`) or macro (`_is_macro_ddl`)
   3. For procedures: extract body between `BEGIN...END` via `_extract_procedure_body`
   4. For macros: extract body between `AS ( ... )` via `_extract_macro_body` (paren-depth-aware)
-  5. Split body into individual statements via `_split_statements` (handles `--` line comments, `/* */` block comments, quoted strings, `\r\n`/`\r`/`\n` normalization)
-  6. Filter to DML statements via `_get_dml_statement_list` (skips SET/DECLARE/SIGNAL/COLLECT)
+  5. Split body into individual statements via `_split_statements` — returns `(text, char_offset)` tuples (handles `--` line comments, `/* */` block comments, quoted strings, `\r\n`/`\r`/`\n` normalization)
+  6. Filter to DML statements via `_get_dml_statement_list` (skips SET/DECLARE/SIGNAL/COLLECT), preserving character offsets
   7. Parse each DML with `sqlglot.parse(sql, dialect="teradata", error_level=ErrorLevel.WARN)`
   8. Walk the AST for `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `CREATE`, `CALL` via `_process_statement`
-  9. For `CREATE` statements: detect `VolatileProperty` → add to `volatile_tables` set; extract both target (CREATE ref) and source tables (SELECT refs)
-  10. Return `DataFlowResult` with table references, call references, step SQL mapping, and volatile table set
+  9. Compute 1-based source line number for each step from `body_offset + char_offset` in the original DDL
+  10. For `CREATE` statements: detect `VolatileProperty` → add to `volatile_tables` set; extract both target (CREATE ref) and source tables (SELECT refs)
+  11. Return `DataFlowResult` with table references, call references, step SQL mapping, step line numbers, and volatile table set
 
 - `_process_statement(stmt, step, cte_aliases, table_refs, call_refs, volatile_tables)` — handles all DML types including INSERT with Schema-wrapped targets, MERGE with USING clause, and CREATE with source subquery
 
@@ -98,16 +100,23 @@ Assembles Cytoscape JSON from parsed data using a 4-column dagre layout:
   - Volatile tables detected via `dataflow.volatile_tables` and typed as `"volatile"` (distinct from `"table"`)
   - Steps with no input tables get a direct proc → step edge
 
-- `build_reverse_lookup_graph(table_name, all_dataflows) -> GraphResponse`
-  - Table node at center
-  - Procedure/macro nodes for each object referencing the table
-  - Edges showing operation type and direction
+- `build_view_graph(view_name, dataflow, detail_data) -> GraphResponse`
+  - 3-column layout: Source Tables → CREATE VIEW step → View node
+  - Source tables extracted from SELECT refs in the CREATE VIEW DDL
+  - View node enriched with column metadata and DDL
 
-Step numbers use bracketed labels (`[1]`, `[2]`, ...) for display.
+- `build_reverse_lookup_graph(table_name, all_dataflows, ddl_lookup) -> GraphResponse`
+  - 3-column layout: Writers (left) → Table (center) → Readers (right)
+  - Write edges for INSERT/UPDATE/DELETE/MERGE/CREATE operations
+  - Read edges for SELECT operations
+  - Procedure nodes include DDL in detail (from `ddl_lookup` cache) so clicking shows source code
+  - Case-insensitive table name matching
+
+Step labels include source line numbers: `[1] INSERT / SELECT\nL#42`.
 
 ### Caching
 
-The reverse lookup requires parsing all procedures/macros in a database. Parsed results are cached per-database in an in-memory dict so subsequent lookups are fast. Cache invalidates on server restart — adequate for Phase 1.
+The table lineage (reverse lookup) requires parsing all procedures/macros in a database. Both parsed dataflow results and raw DDL text are cached together per-database in a single pass (`_ensure_db_cached`) to avoid double-fetching. The DDL cache enables procedure nodes in table diagrams to show source code on click. Cache invalidates on server restart — adequate for Phase 1.
 
 ## Data Models (`models/schemas.py`)
 
@@ -128,6 +137,7 @@ class DataFlowResult(BaseModel):
     call_refs: list[CallRef]
     errors: list[str]   # warnings from partial parse failures
     step_sql: dict[int, str] = {}    # step number → raw SQL text
+    step_lines: dict[int, int] = {}  # step number → 1-based line in DDL
     volatile_tables: set[str] = set()  # names of CREATE VOLATILE TABLE targets
 ```
 
@@ -186,8 +196,8 @@ class GraphResponse(BaseModel):
 
 Two-panel layout with floating overlays:
 
-1. **Tree sidebar** (left, ~220px) — collapsible tree: Database → Object Type → Object. Lazy-loads each level on expand.
-2. **Diagram area** (center, fills remaining space) — Cytoscape.js canvas with dagre layout, `rankDir: LR` (4-column: proc → inputs → steps → outputs). Pan and zoom built in.
+1. **Tree sidebar** (left, ~220px, resizable) — collapsible tree: Database → Object Type → Object. Lazy-loads each level on expand. **Database filter** at top for case-insensitive name searching. **Object filter** appears per-object-type when the list exceeds 10 items for quick search within procedures, macros, tables, or views.
+2. **Diagram area** (center, fills remaining space) — Cytoscape.js canvas with dagre layout, `rankDir: LR`. Procedures/macros use 4-column layout (proc → inputs → steps → outputs). Views use 3-column layout (sources → CREATE VIEW step → view). Tables use 3-column layout (writers → table → readers). Initial zoom clamped to minimum 0.45 for large diagrams. Pan and zoom built in.
 3. **Detail modal** (floating, resizable/draggable) — appears on node/edge click. Shows SQL/DDL with syntax highlighting (keywords blue, functions purple, strings green, numbers orange, comments gray). Copy-to-clipboard button. Node-type-specific content:
    - **Procedure/Macro**: full DDL definition
    - **SQL Step**: extracted DML statement
@@ -195,7 +205,7 @@ Two-panel layout with floating overlays:
    - **Table/View**: DDL fetched from Teradata via `/ddl/{db}/{name}` endpoint
    - **Caller**: parameter list
    - **Edge**: source, target, type, step
-4. **Legend** (bottom-left overlay) — color legend for all node/edge types including volatile tables
+4. **Legend** (bottom-left overlay) — color legend with **visibility checkboxes** for each node type (Procedure/Macro, SQL Step, Table/View, Volatile Table, Called Procedure) and each edge type (Execution Flow, Read, Write). Toggling off a type hides those elements; edges connected to hidden nodes are auto-hidden; orphaned nodes with no remaining visible edges are auto-hidden.
 5. **Export menu** (top-right overlay) — dropdown with PNG, JPG, PDF, HTML (interactive viewer), JSON export options
 
 ### Component structure
@@ -204,11 +214,11 @@ Two-panel layout with floating overlays:
 frontend/src/
 ├── App.tsx                  # Root — layout shell (sidebar | diagram | export | modal)
 ├── components/
-│   ├── TreeSidebar.tsx      # Database → Object Type → Object tree
-│   ├── DiagramView.tsx      # Cytoscape.js canvas + dagre layout (forwardRef exposing getCy)
+│   ├── TreeSidebar.tsx      # Database → Object Type → Object tree with database + object filters
+│   ├── DiagramView.tsx      # Cytoscape.js canvas + dagre layout (forwardRef, visibility toggles)
 │   ├── DetailModal.tsx      # Resizable/draggable modal with SQL syntax highlighting + copy
 │   ├── ExportMenu.tsx       # Export dropdown: PNG, JPG, PDF, HTML, JSON
-│   ├── Legend.tsx            # Color legend for node/edge types
+│   ├── Legend.tsx            # Visibility checkboxes for all node/edge types
 │   └── DetailPanel.tsx      # (legacy, unused)
 ├── hooks/
 │   ├── useDatabases.ts      # Fetch /api/databases
@@ -330,7 +340,7 @@ procviz/
 - Alation enrichment (table descriptions, stewardship, deep-links) — Phase 2
 - Multi-procedure dependency graphs — Phase 3
 - Airflow/Informatica integration — Phase 3
-- Search, filter, minimap, step number override — Phase 4
+- Minimap, step number override — Phase 4
 - Mock/stub mode for development without Teradata
 
 ## Implemented Beyond Original Spec
@@ -349,3 +359,10 @@ The following features were added during Phase 1 development based on user feedb
 - **SHOW-based DDL retrieval** — replaced `DBC.TablesV RequestText` with `SHOW TABLE/VIEW/PROCEDURE/MACRO` loop
 - **Diagram export** — PNG, JPG, PDF, HTML (interactive self-contained viewer), JSON (Cytoscape.js format)
 - **HTML export with interactivity** — node click shows SQL/DDL modal with syntax highlighting and copy-to-clipboard
+- **Source line numbers** — SQL step nodes show `L#42` indicating the DDL line number for easy source location
+- **View data flow diagrams** — views render as forward data flow (source tables → CREATE VIEW step → view) instead of reverse lookup
+- **Table lineage diagrams** — tables show writers (left) → table (center) → readers (right), with DDL available on procedure node click
+- **Visibility toggles** — checkboxes for every node type and edge type; auto-hides dangling edges and orphaned nodes
+- **Consistent initial sizing** — uniform 12px font, minimum zoom clamped at 0.45 for large diagrams
+- **Database filter** — case-insensitive text filter at top of navigation sidebar
+- **Object filter** — per-object-type filter for quick search within long object lists (appears when >10 items)

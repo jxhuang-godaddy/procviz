@@ -108,10 +108,16 @@ def build_dataflow_graph(
         step_detail: dict = {"step": step, "operations": summary}
         if step in dataflow.step_sql:
             step_detail["sql"] = dataflow.step_sql[step]
+        line_no = dataflow.step_lines.get(step)
+        if line_no is not None:
+            step_detail["line"] = line_no
+        step_label = f"{step_str} {summary}"
+        if line_no is not None:
+            step_label += f"\nL#{line_no}"
         nodes.append(
             CytoscapeNode(
                 id=step_node_id,
-                label=f"{step_str} {summary}",
+                label=step_label,
                 type="step",
                 detail=step_detail,
             )
@@ -224,16 +230,111 @@ def build_dataflow_graph(
     return GraphResponse(nodes=nodes, edges=edges)
 
 
-def build_reverse_lookup_graph(
-    table_name: str,
-    all_dataflows: dict[str, DataFlowResult],
+def build_view_graph(
+    view_name: str,
+    dataflow: DataFlowResult,
+    detail_data: dict,
 ) -> GraphResponse:
-    """Build Cytoscape JSON for a table's reverse-lookup diagram."""
+    """Build Cytoscape JSON for a view data-flow diagram.
+
+    3-column LR layout:
+      Col 0: Source tables (SELECT sources)
+      Col 1: CREATE VIEW step node
+      Col 2: The view itself
+    """
     nodes: list[CytoscapeNode] = []
     edges: list[CytoscapeEdge] = []
     seen_nodes: set[str] = set()
 
-    # Center node — the table
+    source_refs = [r for r in dataflow.table_refs if r.operation == "SELECT"]
+    create_refs = [r for r in dataflow.table_refs if r.operation == "CREATE"]
+
+    # The view node — use the explicit CREATE target if available, else the passed name
+    view_id = create_refs[0].name if create_refs else view_name
+    short_label = view_id.split(".")[-1]
+
+    # Determine the DDL text for the step node
+    ddl_text = detail_data.get("ddl", "")
+
+    # Step node
+    step_id = f"{view_id}__step_create"
+    step_detail: dict = {"sql": ddl_text, "step": 1, "operations": "CREATE VIEW"}
+    nodes.append(
+        CytoscapeNode(
+            id=step_id,
+            label="[1] CREATE VIEW",
+            type="step",
+            detail=step_detail,
+        )
+    )
+    seen_nodes.add(step_id)
+
+    # View node (col 2)
+    nodes.append(
+        CytoscapeNode(
+            id=view_id,
+            label=short_label,
+            type="table",
+            detail=detail_data,
+        )
+    )
+    seen_nodes.add(view_id)
+
+    # Step → view (write edge)
+    edges.append(
+        CytoscapeEdge(
+            source=step_id,
+            target=view_id,
+            type="write",
+            step="[1]",
+            label="CREATE",
+        )
+    )
+
+    # Source tables (col 0)
+    for ref in source_refs:
+        node_id = ref.name
+        if node_id not in seen_nodes:
+            nodes.append(
+                CytoscapeNode(
+                    id=node_id,
+                    label=node_id.split(".")[-1],
+                    type="table",
+                    detail={},
+                )
+            )
+            seen_nodes.add(node_id)
+
+        edges.append(
+            CytoscapeEdge(
+                source=node_id,
+                target=step_id,
+                type="read",
+                step="[1]",
+                label="SELECT",
+            )
+        )
+
+    return GraphResponse(nodes=nodes, edges=edges)
+
+
+def build_reverse_lookup_graph(
+    table_name: str,
+    all_dataflows: dict[str, DataFlowResult],
+    ddl_lookup: dict[str, str] | None = None,
+) -> GraphResponse:
+    """Build Cytoscape JSON for a table's data-flow diagram.
+
+    Layout: writers (left) → table (center) → readers (right).
+    Procedure nodes include DDL in their detail so clicking shows source code.
+    """
+    nodes: list[CytoscapeNode] = []
+    edges: list[CytoscapeEdge] = []
+    seen_nodes: set[str] = set()
+    table_lower = table_name.lower()
+    ddl_lookup = ddl_lookup or {}
+
+    # The table node (center)
     nodes.append(
         CytoscapeNode(
             id=table_name,
@@ -245,35 +346,50 @@ def build_reverse_lookup_graph(
     seen_nodes.add(table_name)
 
     for proc_name, dataflow in all_dataflows.items():
-        matching_refs = [r for r in dataflow.table_refs if r.name == table_name]
-        if not matching_refs:
+        write_refs = [
+            r for r in dataflow.table_refs
+            if r.name.lower() == table_lower and r.operation != "SELECT"
+        ]
+        read_refs = [
+            r for r in dataflow.table_refs
+            if r.name.lower() == table_lower and r.operation == "SELECT"
+        ]
+        if not write_refs and not read_refs:
             continue
 
         if proc_name not in seen_nodes:
+            proc_detail: dict = {}
+            if proc_name in ddl_lookup:
+                proc_detail["ddl"] = ddl_lookup[proc_name]
             nodes.append(
                 CytoscapeNode(
                     id=proc_name,
                     label=proc_name.split(".")[-1],
                     type="proc",
-                    detail={},
+                    detail=proc_detail,
                 )
             )
             seen_nodes.add(proc_name)
 
-        for ref in matching_refs:
-            edge_type = _edge_type_for_operation(ref.operation)
+        for ref in write_refs:
             step_str = _step_label(ref.step)
-
-            if edge_type == "read":
-                source, target = table_name, proc_name
-            else:
-                source, target = proc_name, table_name
-
             edges.append(
                 CytoscapeEdge(
-                    source=source,
-                    target=target,
-                    type=edge_type,
+                    source=proc_name,
+                    target=table_name,
+                    type="write",
+                    step=step_str,
+                    label=f"{step_str} {ref.operation}",
+                )
+            )
+
+        for ref in read_refs:
+            step_str = _step_label(ref.step)
+            edges.append(
+                CytoscapeEdge(
+                    source=table_name,
+                    target=proc_name,
+                    type="read",
                     step=step_str,
                     label=f"{step_str} {ref.operation}",
                 )

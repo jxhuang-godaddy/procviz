@@ -128,10 +128,18 @@ def test_reverse_lookup_graph():
     }
     result = build_reverse_lookup_graph("db.orders", all_dataflows)
     assert isinstance(result, GraphResponse)
-    # Center table + 2 procs = 3
+    # Center table + sp_clean (writer) + sp_load (reader) = 3
     assert len(result.nodes) == 3
-    # sp_load reads, sp_clean deletes = 2 edges
+    # sp_clean DELETE (write) + sp_load SELECT (read) = 2 edges
     assert len(result.edges) == 2
+
+    write_edges = [e for e in result.edges if e.type == "write"]
+    read_edges = [e for e in result.edges if e.type == "read"]
+    assert len(write_edges) == 1
+    assert write_edges[0].source == "sp_clean"
+    assert len(read_edges) == 1
+    assert read_edges[0].source == "db.orders"
+    assert read_edges[0].target == "sp_load"
 
     center = next(n for n in result.nodes if n.id == "db.orders")
     assert center.type == "table"

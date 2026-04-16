@@ -26,12 +26,20 @@ export interface DiagramHandle {
   getCy: () => Core | null;
 }
 
+export interface VisibilityMap {
+  nodes: Record<string, boolean>;
+  edges: Record<string, boolean>;
+}
+
 interface DiagramViewProps {
   graph: GraphResponse;
   onSelect: (detail: DetailSelection) => void;
+  visibility: VisibilityMap;
 }
 
-const DiagramView = forwardRef<DiagramHandle, DiagramViewProps>(function DiagramView({ graph, onSelect }, ref) {
+const MIN_ZOOM = 0.45;
+
+const DiagramView = forwardRef<DiagramHandle, DiagramViewProps>(function DiagramView({ graph, onSelect, visibility }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
   const onSelectRef = useRef(onSelect);
@@ -65,7 +73,7 @@ const DiagramView = forwardRef<DiagramHandle, DiagramViewProps>(function Diagram
             "text-valign": "center",
             "text-halign": "center",
             color: "#fff",
-            "font-size": "11px",
+            "font-size": "12px",
             width: "label",
             height: "40px",
             "padding-left": "14px",
@@ -79,7 +87,6 @@ const DiagramView = forwardRef<DiagramHandle, DiagramViewProps>(function Diagram
           style: {
             "background-color": NODE_COLORS.proc,
             height: "44px",
-            "font-size": "12px",
             "font-weight": "bold",
             "border-width": 2,
             "border-color": "#3B2D8F",
@@ -89,8 +96,8 @@ const DiagramView = forwardRef<DiagramHandle, DiagramViewProps>(function Diagram
           selector: "node.step",
           style: {
             "background-color": NODE_COLORS.step,
-            height: "36px",
-            "font-size": "10px",
+            height: "48px",
+            "text-wrap": "wrap",
             "border-width": 1,
             "border-color": "#2563EB",
           },
@@ -117,7 +124,7 @@ const DiagramView = forwardRef<DiagramHandle, DiagramViewProps>(function Diagram
           selector: "edge",
           style: {
             label: "data(label)",
-            "font-size": "9px",
+            "font-size": "10px",
             "text-rotation": "autorotate",
             "text-margin-y": -10,
             "curve-style": "bezier",
@@ -188,12 +195,61 @@ const DiagramView = forwardRef<DiagramHandle, DiagramViewProps>(function Diagram
       }
     });
 
+    // Fit diagram to viewport after layout, clamping zoom so labels stay readable
+    cy.one("layoutstop", () => {
+      cy.fit(undefined, 30);
+      if (cy.zoom() < MIN_ZOOM) {
+        cy.zoom(MIN_ZOOM);
+        cy.center();
+      }
+    });
+
     cyRef.current = cy;
 
     return () => {
       cy.destroy();
     };
   }, [graph]);
+
+  // Toggle node/edge visibility, then hide orphaned nodes & dangling edges
+  useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy) return;
+
+    // Pass 1 — apply direct visibility from toggles
+    // Show/hide nodes by type
+    for (const [nodeType, visible] of Object.entries(visibility.nodes)) {
+      cy.nodes(`.${nodeType}`).style("display", visible ? "element" : "none");
+    }
+    // Show/hide edges by type (skip scaffold edges)
+    for (const [edgeType, visible] of Object.entries(visibility.edges)) {
+      cy.edges(`.${edgeType}`).not(".hidden").style("display", visible ? "element" : "none");
+    }
+
+    // Pass 2 — hide edges where either endpoint is hidden
+    cy.edges().not(".hidden").forEach((edge) => {
+      if (edge.style("display") === "none") return;
+      const srcHidden = edge.source().style("display") === "none";
+      const tgtHidden = edge.target().style("display") === "none";
+      if (srcHidden || tgtHidden) {
+        edge.style("display", "none");
+      }
+    });
+
+    // Pass 3 — hide nodes that have no remaining visible non-hidden edges
+    // (skip the root proc/macro node which should always stay visible if its type is on)
+    cy.nodes().forEach((node) => {
+      if (node.style("display") === "none") return;
+      const nodeType = node.data("type") as string;
+      if (nodeType === "proc" || nodeType === "macro") return;
+      const hasVisibleEdge = node.connectedEdges().not(".hidden").some(
+        (edge) => edge.style("display") !== "none",
+      );
+      if (!hasVisibleEdge) {
+        node.style("display", "none");
+      }
+    });
+  }, [visibility]);
 
   return <div ref={containerRef} className="w-full h-full" />;
 });

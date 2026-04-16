@@ -20,19 +20,22 @@ Procviz is a locally-run web application that generates interactive flowchart an
 
 ### Diagram Types
 1. **Control flow diagram** — sequential flowchart of a single stored procedure's SPL logic (IF/ELSE branches, loops, SIGNAL, BT/ET scope) *(Phase 2)*
-2. **Data flow diagram** — which tables a procedure reads from and writes to, with operation type (SELECT/UPDATE/INSERT/CREATE) and step order labels. Supports procedures, macros, and volatile tables.
-3. **Multi-procedure dependency graph** — call tree and shared table view across a set of related procedures, with parallel branch support *(Phase 3)*
+2. **Data flow diagram (procedure/macro)** — which tables a procedure reads from and writes to, with operation type (SELECT/UPDATE/INSERT/CREATE), step order labels, and source line numbers (`L#123`)
+3. **Data flow diagram (view)** — source tables → CREATE VIEW step → view node, showing where the view's data comes from
+4. **Table lineage diagram** — procedures that write to the table (left) → table (center) → procedures that read from the table (right), with DDL available on procedure node click
+5. **Multi-procedure dependency graph** — call tree and shared table view across a set of related procedures, with parallel branch support *(Phase 3)*
 
 ### Interaction
 - Click any node to see details in a **resizable, draggable modal** with SQL syntax highlighting (keywords, functions, strings, numbers, comments — all color-coded) and copy-to-clipboard
 - Procedure/macro nodes show full DDL definition
-- SQL step nodes show the extracted DML statement
+- SQL step nodes show the extracted DML statement with source line number (`L#123`)
 - Volatile table nodes show the CREATE statement from the step that creates them
 - Table/view nodes fetch and display DDL from Teradata via SHOW TABLE/VIEW
 - Pan and zoom (built into Cytoscape.js)
 - Node labels auto-sized to fit full text (no truncation)
-- Search / highlight by procedure or table name *(Phase 4)*
-- Filter by schema or database *(Phase 4)*
+- **Visibility toggles** — checkboxes in the legend to show/hide each node type (Procedure/Macro, SQL Step, Table/View, Volatile Table, Called Procedure) and each edge type (Execution Flow, Read, Write). Hidden nodes automatically hide their connected edges; orphaned nodes with no remaining visible edges are auto-hidden.
+- **Database filter** — text input at the top of the sidebar for case-insensitive name filtering across all databases
+- **Object filter** — per-object-type text filter that appears when a list has more than 10 items, enabling quick search within procedures, macros, tables, or views
 - Minimap for large graphs *(Phase 4)*
 - Inline step number override when auto-detection is insufficient *(Phase 4)*
 
@@ -90,7 +93,7 @@ Procviz is a locally-run web application that generates interactive flowchart an
 {
   "nodes": [
     { "data": { "id": "proc_name", "label": "Procedure", "type": "proc", "detail": {"parameters": [], "ddl": "..."} }},
-    { "data": { "id": "proc__step_1", "label": "[1] INSERT / SELECT", "type": "step", "detail": {"step": 1, "sql": "..."} }},
+    { "data": { "id": "proc__step_1", "label": "[1] INSERT / SELECT\nL#42", "type": "step", "detail": {"step": 1, "sql": "...", "line": 42} }},
     { "data": { "id": "db.table_name", "label": "Table", "type": "table", "detail": {} }},
     { "data": { "id": "vt_temp", "label": "vt_temp", "type": "volatile", "detail": {} }},
     { "data": { "id": "caller", "label": "Caller", "type": "caller", "detail": {} }}
@@ -153,11 +156,11 @@ procviz/
     │   │   ├── useObjects.ts
     │   │   └── useDataflow.ts
     │   ├── components/
-    │   │   ├── TreeSidebar.tsx     # Database → Object Type → Object tree
-    │   │   ├── DiagramView.tsx     # Cytoscape.js canvas + dagre layout (forwardRef)
+    │   │   ├── TreeSidebar.tsx     # Database → Object Type → Object tree with filters
+    │   │   ├── DiagramView.tsx     # Cytoscape.js canvas + dagre layout (forwardRef, visibility)
     │   │   ├── DetailModal.tsx     # Resizable/draggable modal with SQL syntax highlighting
     │   │   ├── ExportMenu.tsx      # Export dropdown: PNG, JPG, PDF, HTML, JSON
-    │   │   ├── Legend.tsx          # Color legend for node/edge types
+    │   │   ├── Legend.tsx          # Visibility checkboxes for all node/edge types
     │   │   └── DetailPanel.tsx     # (legacy, unused after DetailModal replacement)
     │   ├── types/graph.ts
     │   └── styles/index.css
@@ -290,18 +293,27 @@ react, react-dom — UI framework
 1. Retrieve DDL via `SHOW PROCEDURE/MACRO {db}.{name}`
 2. Detect DDL type: procedure (`BEGIN...END`) or macro (`AS (...)`)
 3. Strip leading comments (`--`, `/* */`) before type detection
-4. Extract body and split into individual DML statements (custom splitter handles `--`, `/* */`, quoted strings, `\r\n`/`\r`/`\n`)
+4. Extract body (with byte offset for line number tracking) and split into individual DML statements with character offsets
 5. Parse each DML with `sqlglot` (Teradata dialect) → extract SELECT/INSERT/UPDATE/DELETE/MERGE/CREATE targets, CALL statements
-6. Detect `CREATE VOLATILE TABLE` via `exp.VolatileProperty` → track in `volatile_tables` set
-7. Build 4-column dagre layout: Procedure → Input Tables → SQL Steps → Output Tables / CALL targets
-8. Case-insensitive deduplication of table names
-9. Return Cytoscape JSON with step SQL, DDL, and parameters in node detail
+6. Compute source line number for each step from character offset within the DDL
+7. Detect `CREATE VOLATILE TABLE` via `exp.VolatileProperty` → track in `volatile_tables` set
+8. Build 4-column dagre layout: Procedure → Input Tables → SQL Steps → Output Tables / CALL targets
+9. Step labels include source line number: `[1] INSERT / SELECT\nL#42`
+10. Case-insensitive deduplication of table names
+11. Return Cytoscape JSON with step SQL, line numbers, DDL, and parameters in node detail
 
-### Reverse lookup (tables / views)
-1. Parse all procedures/macros in the database (cached in-memory)
-2. Find all references to the target table
-3. Build graph centered on the table with referencing procedure edges
-4. Enrich center node with column metadata from `DBC.ColumnsV`
+### View data flow
+1. Retrieve DDL via `SHOW VIEW {db}.{name}`
+2. Parse with sqlglot → extract CREATE target (the view) and SELECT source tables
+3. Build 3-column layout: Source Tables → CREATE VIEW step → View node
+4. Enrich view node with column metadata from `DBC.ColumnsV`
+
+### Table lineage (reverse lookup)
+1. Parse all procedures/macros in the database (cached in-memory along with DDL text)
+2. Find all references to the target table (case-insensitive matching)
+3. Build graph: writers (left) → table (center) → readers (right)
+4. Procedure nodes include DDL in their detail so clicking shows source code
+5. Enrich center node with column metadata from `DBC.ColumnsV`
 
 ### Multi-procedure *(Phase 3)*
 1. For each procedure, run single-procedure parsing
@@ -334,7 +346,11 @@ react, react-dom — UI framework
 
 ### Layout
 - Data flow diagrams: `dagre` with `rankDir: LR` (left to right), 4-column layout
+- View diagrams: 3-column layout (source tables → CREATE VIEW step → view)
+- Table diagrams: 3-column layout (writers → table → readers)
 - Nodes auto-sized to fit label text (`width: "label"` with padding)
+- Initial zoom clamped to minimum 0.45 so labels stay readable on large diagrams
+- All node labels rendered at 12px font for consistent sizing
 
 ---
 
@@ -348,9 +364,15 @@ react, react-dom — UI framework
 - Volatile table detection and distinct visual treatment
 - Leading comment stripping, line comment handling, CR/LF normalization
 - Case-insensitive table name deduplication
+- Source line numbers on SQL step nodes for easy DDL location
 - React + Cytoscape.js frontend with 4-column dagre layout
+- View data flow diagrams: source tables → CREATE VIEW step → view
+- Table lineage diagrams: writers → table → readers, with DDL on procedure nodes
 - Resizable/draggable detail modal with SQL syntax highlighting and copy-to-clipboard
 - Diagram export: PNG, JPG, PDF, HTML (interactive viewer), JSON (Cytoscape.js format)
+- Visibility toggles for all node types and edge types with auto-hiding of orphaned nodes
+- Database filter and per-object-type filter in navigation sidebar
+- Consistent 12px font sizing with minimum zoom clamping for large diagrams
 - `.env` credential loading
 - `install.sh` / `start.sh`
 
@@ -369,7 +391,6 @@ react, react-dom — UI framework
 - Informatica connector (after Airflow validated)
 
 ### Phase 4 — UX polish
-- Procedure search and filter
 - Shared table highlighting
 - Impact analysis (click table → highlight all touching procedures)
 - Minimap extension

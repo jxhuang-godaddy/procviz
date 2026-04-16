@@ -145,29 +145,38 @@ def _process_statement(
             call_refs.append(CallRef(target=target, step=step))
 
 
-def _extract_procedure_body(ddl: str) -> str | None:
-    """Extract the body between the outermost BEGIN and the final END."""
-    # Greedy match: first BEGIN to last END in the DDL
+def _extract_procedure_body(ddl: str) -> tuple[str, int] | None:
+    """Extract the body between the outermost BEGIN and the final END.
+
+    Returns (body_text, body_start_offset) or None.
+    """
     match = re.search(
         r"\bBEGIN\b\s+(.*)\s+\bEND\b",
         ddl,
         re.DOTALL | re.IGNORECASE,
     )
-    return match.group(1) if match else None
+    if not match:
+        return None
+    return match.group(1), match.start(1)
 
 
-def _split_statements(body: str) -> list[str]:
+def _split_statements(body: str) -> list[tuple[str, int]]:
     """Split SQL body on semicolons, respecting quoted strings, block and line comments.
 
     Handles all line-ending styles (``\\r\\n``, ``\\r``, ``\\n``).
     Line comments (``--``) are stripped so that patterns like ``--/*``
     don't start a false block comment and commented-out DML is ignored.
+
+    Returns a list of (statement_text, char_offset) tuples where char_offset
+    is the position of the first non-whitespace character in the original body.
     """
     # Normalise line endings to \n so line-comment detection works uniformly
     body = body.replace("\r\n", "\n").replace("\r", "\n")
 
-    stmts: list[str] = []
+    stmts: list[tuple[str, int]] = []
     current: list[str] = []
+    stmt_start: int = 0  # character offset of current statement start
+    found_content = False  # whether we've seen non-whitespace for this stmt
     in_quote = False
     in_block_comment = False
     i = 0
@@ -190,6 +199,9 @@ def _split_statements(body: str) -> list[str]:
                     continue
                 in_quote = False
         elif ch == "'":
+            if not found_content:
+                stmt_start = i
+                found_content = True
             in_quote = True
             current.append(ch)
         elif ch == "-" and i + 1 < len(body) and body[i + 1] == "-":
@@ -203,15 +215,21 @@ def _split_statements(body: str) -> list[str]:
             i += 2
             continue
         elif ch == ";":
-            stmts.append("".join(current).strip())
+            text = "".join(current).strip()
+            if text:
+                stmts.append((text, stmt_start))
             current = []
+            found_content = False
         else:
+            if not found_content and not ch.isspace():
+                stmt_start = i
+                found_content = True
             current.append(ch)
         i += 1
     trailing = "".join(current).strip()
     if trailing:
-        stmts.append(trailing)
-    return [s for s in stmts if s]
+        stmts.append((trailing, stmt_start))
+    return stmts
 
 
 _DML_RE = re.compile(
@@ -225,21 +243,21 @@ _SKIP_RE = re.compile(
 )
 
 
-def _get_dml_statement_list(body: str) -> list[str]:
+def _get_dml_statement_list(body: str) -> list[tuple[str, int]]:
     """Extract individual DML statements from a procedure body.
 
-    Returns a list of standalone SQL strings, one per DML statement.
+    Returns a list of (sql_text, char_offset) tuples.
     Skips SET/DECLARE/procedural statements to avoid matching DML keywords
     inside string literals.
     """
     stmts = _split_statements(body)
-    dml: list[str] = []
-    for s in stmts:
+    dml: list[tuple[str, int]] = []
+    for s, offset in stmts:
         if _SKIP_RE.match(s):
             continue
         m = _DML_RE.search(s)
         if m:
-            dml.append(s[m.start():])
+            dml.append((s[m.start():], offset + m.start()))
     return dml
 
 
@@ -281,8 +299,11 @@ def _is_macro_ddl(ddl: str) -> bool:
     )
 
 
-def _extract_macro_body(ddl: str) -> str | None:
-    """Extract the body of a macro between AS ( ... ) — the outermost parens."""
+def _extract_macro_body(ddl: str) -> tuple[str, int] | None:
+    """Extract the body of a macro between AS ( ... ) — the outermost parens.
+
+    Returns (body_text, body_start_offset) or None.
+    """
     # Normalise line endings
     ddl = ddl.replace("\r\n", "\n").replace("\r", "\n")
     # Find the AS keyword followed by opening paren
@@ -309,9 +330,9 @@ def _extract_macro_body(ddl: str) -> str | None:
         elif ch == ")":
             depth -= 1
             if depth == 0:
-                return ddl[start:i]
+                return ddl[start:i], start
         i += 1
-    return ddl[start:]
+    return ddl[start:], start
 
 
 def parse_dataflow(ddl: str) -> DataFlowResult:
@@ -336,21 +357,27 @@ def parse_dataflow(ddl: str) -> DataFlowResult:
     is_macro = _is_macro_ddl(ddl)
     if is_proc or is_macro:
         if is_proc:
-            body = _extract_procedure_body(ddl)
-            if not body:
+            result = _extract_procedure_body(ddl)
+            if not result:
                 errors.append("Could not extract procedure body between BEGIN/END")
                 return DataFlowResult(table_refs=table_refs, call_refs=call_refs, errors=errors)
+            body, body_offset = result
         else:
-            body = _extract_macro_body(ddl)
-            if not body:
+            result = _extract_macro_body(ddl)
+            if not result:
                 errors.append("Could not extract macro body between AS ( ... )")
                 return DataFlowResult(table_refs=table_refs, call_refs=call_refs, errors=errors)
+            body, body_offset = result
+
+        # Normalise DDL line endings for line-number counting
+        ddl_norm = ddl.replace("\r\n", "\n").replace("\r", "\n")
 
         dml_stmts = _get_dml_statement_list(body)
         step_sql: dict[int, str] = {}
+        step_lines: dict[int, int] = {}
         volatile_tables: set[str] = set()
         step = 0
-        for sql_text in dml_stmts:
+        for sql_text, char_offset in dml_stmts:
             try:
                 parsed = sqlglot.parse(
                     sql_text, dialect="teradata", error_level=ErrorLevel.WARN
@@ -368,12 +395,15 @@ def parse_dataflow(ddl: str) -> DataFlowResult:
                     continue
                 step += 1
                 step_sql[step] = sql_text
+                # char_offset is relative to body; add body_offset for DDL position
+                abs_offset = body_offset + char_offset
+                step_lines[step] = ddl_norm[:abs_offset].count("\n") + 1
                 cte_aliases = _extract_cte_aliases(stmt)
                 _process_statement(stmt, step, cte_aliases, table_refs, call_refs, volatile_tables)
 
         return DataFlowResult(
             table_refs=table_refs, call_refs=call_refs, errors=errors,
-            step_sql=step_sql, volatile_tables=volatile_tables,
+            step_sql=step_sql, step_lines=step_lines, volatile_tables=volatile_tables,
         )
 
     # Non-procedure DDL: parse as a whole

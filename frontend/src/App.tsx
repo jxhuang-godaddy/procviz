@@ -1,6 +1,6 @@
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import TreeSidebar from "./components/TreeSidebar";
-import DiagramView, { type DiagramHandle } from "./components/DiagramView";
+import DiagramView, { type DiagramHandle, type VisibilityMap } from "./components/DiagramView";
 import DetailModal from "./components/DetailModal";
 import Legend from "./components/Legend";
 import ExportMenu from "./components/ExportMenu";
@@ -21,7 +21,18 @@ export type DetailSelection =
 export default function App() {
   const [selection, setSelection] = useState<Selection | null>(null);
   const [detail, setDetail] = useState<DetailSelection>(null);
+  const [visibility, setVisibility] = useState<VisibilityMap>({
+    nodes: { proc: true, macro: true, step: true, table: true, volatile: true, caller: true },
+    edges: { call: true, read: true, write: true },
+  });
   const diagramRef = useRef<DiagramHandle>(null);
+
+  const handleToggle = useCallback((category: "nodes" | "edges", key: string) => {
+    setVisibility((prev) => ({
+      ...prev,
+      [category]: { ...prev[category], [key]: !prev[category][key] },
+    }));
+  }, []);
 
   const { graph, loading, error } = useDataflow(
     selection?.db ?? null,
@@ -56,8 +67,8 @@ export default function App() {
         )}
         {graph && !loading && (
           <>
-            <DiagramView ref={diagramRef} graph={graph} onSelect={setDetail} />
-            <Legend />
+            <DiagramView ref={diagramRef} graph={graph} onSelect={setDetail} visibility={visibility} />
+            <Legend visibility={visibility} onToggle={handleToggle} />
             <ExportMenu
               getCy={() => diagramRef.current?.getCy() ?? null}
               objectName={selection?.name ?? "diagram"}

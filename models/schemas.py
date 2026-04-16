@@ -19,6 +19,7 @@ class DataFlowResult(BaseModel):
     call_refs: list[CallRef]
     errors: list[str]
     step_sql: dict[int, str] = {}  # step number → raw SQL text
+    step_lines: dict[int, int] = {}  # step number → 1-based line in DDL
     volatile_tables: set[str] = set()  # names of CREATE VOLATILE TABLE targets
 
 
