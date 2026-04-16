@@ -5,9 +5,10 @@ import type { ObjectType } from "../types/graph";
 
 interface TreeSidebarProps {
   onSelect: (db: string, objectType: ObjectType, name: string) => void;
+  activeSelection?: { db: string; objectType: ObjectType; name: string } | null;
 }
 
-export default function TreeSidebar({ onSelect }: TreeSidebarProps) {
+export default function TreeSidebar({ onSelect, activeSelection }: TreeSidebarProps) {
   const { databases, loading: dbLoading, error } = useDatabases();
   const { objectTypes, objects, loadObjectTypes, loadObjects } = useObjects();
 
@@ -44,6 +45,22 @@ export default function TreeSidebar({ onSelect }: TreeSidebarProps) {
       window.removeEventListener("mouseup", onMouseUp);
     };
   }, []);
+
+  // Sync sidebar expansion when external navigation occurs (e.g., double-click)
+  useEffect(() => {
+    if (!activeSelection) return;
+    const { db, objectType, name } = activeSelection;
+    const key = `${db}/${objectType}/${name}`;
+    if (selected === key) return; // already showing this selection
+
+    // Expand the db and type, load data if needed
+    setExpandedDbs((prev) => new Set(prev).add(db));
+    loadObjectTypes(db);
+    const typeKey = `${db}/${objectType}`;
+    setExpandedTypes((prev) => new Set(prev).add(typeKey));
+    loadObjects(db, objectType);
+    setSelected(key);
+  }, [activeSelection]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function toggleDb(db: string) {
     const next = new Set(expandedDbs);

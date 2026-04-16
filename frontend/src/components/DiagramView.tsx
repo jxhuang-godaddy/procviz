@@ -34,16 +34,21 @@ export interface VisibilityMap {
 interface DiagramViewProps {
   graph: GraphResponse;
   onSelect: (detail: DetailSelection) => void;
+  onNavigate?: (db: string, objectType: string, name: string) => void;
   visibility: VisibilityMap;
 }
 
 const MIN_ZOOM = 0.45;
 
-const DiagramView = forwardRef<DiagramHandle, DiagramViewProps>(function DiagramView({ graph, onSelect, visibility }, ref) {
+const NAVIGABLE_TYPES = new Set(["proc", "macro", "table", "volatile", "caller"]);
+
+const DiagramView = forwardRef<DiagramHandle, DiagramViewProps>(function DiagramView({ graph, onSelect, onNavigate, visibility }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
+  const onNavigateRef = useRef(onNavigate);
+  onNavigateRef.current = onNavigate;
 
   useImperativeHandle(ref, () => ({ getCy: () => cyRef.current }));
 
@@ -193,6 +198,25 @@ const DiagramView = forwardRef<DiagramHandle, DiagramViewProps>(function Diagram
       if (evt.target === cy) {
         onSelectRef.current(null);
       }
+    });
+
+    // Double-click navigable nodes to open their own diagram
+    cy.on("dbltap", "node", (evt: EventObject) => {
+      const nav = onNavigateRef.current;
+      if (!nav) return;
+      const data = evt.target.data() as CytoscapeNodeData;
+      if (!NAVIGABLE_TYPES.has(data.type)) return;
+      const nodeId = data.id;
+      const dotIdx = nodeId.indexOf(".");
+      if (dotIdx < 0) return; // unqualified — can't navigate
+      const db = nodeId.slice(0, dotIdx);
+      const name = nodeId.slice(dotIdx + 1);
+      const typeMap: Record<string, string> = {
+        proc: "procedure", macro: "macro", table: "table",
+        volatile: "table", caller: "procedure",
+      };
+      const objType = typeMap[data.type];
+      if (objType) nav(db, objType, name);
     });
 
     // Fit diagram to viewport after layout, clamping zoom so labels stay readable

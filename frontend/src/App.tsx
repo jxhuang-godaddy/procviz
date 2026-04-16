@@ -40,14 +40,14 @@ export default function App() {
     selection?.name ?? null
   );
 
-  function handleSelect(db: string, objectType: ObjectType, name: string) {
-    setSelection({ db, objectType, name });
+  function handleSelect(db: string, objectType: ObjectType | string, name: string) {
+    setSelection({ db, objectType: objectType as ObjectType, name });
     setDetail(null);
   }
 
   return (
     <div className="flex h-screen bg-gray-50 text-gray-900">
-      <TreeSidebar onSelect={handleSelect} />
+      <TreeSidebar onSelect={handleSelect} activeSelection={selection} />
 
       <div className="flex-1 relative">
         {!selection && (
@@ -69,7 +69,7 @@ export default function App() {
         )}
         {graph && !loading && (
           <>
-            <DiagramView ref={diagramRef} graph={graph} onSelect={setDetail} visibility={visibility} />
+            <DiagramView ref={diagramRef} graph={graph} onSelect={setDetail} onNavigate={handleSelect} visibility={visibility} />
             <Legend visibility={visibility} onToggle={handleToggle} />
             <div className="absolute top-4 right-4 z-10 flex gap-1.5">
               <div className="flex bg-white border border-gray-300 rounded shadow-sm text-sm">
