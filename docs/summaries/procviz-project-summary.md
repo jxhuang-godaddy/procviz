@@ -31,6 +31,7 @@ Procviz is a locally-run web application that generates interactive flowchart an
 - SQL step nodes show the extracted DML statement with source line number (`L#123`)
 - Volatile table nodes show the CREATE statement from the step that creates them
 - Table/view nodes fetch and display DDL from Teradata via SHOW TABLE/VIEW
+- **Zoom toolbar** — Fit (fit entire diagram to screen), + (zoom in), - (zoom out) buttons in the top-right of the diagram pane
 - Pan and zoom (built into Cytoscape.js)
 - Node labels auto-sized to fit full text (no truncation)
 - **Visibility toggles** — checkboxes in the legend to show/hide each node type (Procedure/Macro, SQL Step, Table/View, Volatile Table, Called Procedure) and each edge type (Execution Flow, Read, Write). Hidden nodes automatically hide their connected edges; orphaned nodes with no remaining visible edges are auto-hidden.

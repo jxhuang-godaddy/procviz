@@ -206,7 +206,7 @@ Two-panel layout with floating overlays:
    - **Caller**: parameter list
    - **Edge**: source, target, type, step
 4. **Legend** (bottom-left overlay) — color legend with **visibility checkboxes** for each node type (Procedure/Macro, SQL Step, Table/View, Volatile Table, Called Procedure) and each edge type (Execution Flow, Read, Write). Toggling off a type hides those elements; edges connected to hidden nodes are auto-hidden; orphaned nodes with no remaining visible edges are auto-hidden.
-5. **Export menu** (top-right overlay) — dropdown with PNG, JPG, PDF, HTML (interactive viewer), JSON export options
+5. **Toolbar** (top-right overlay) — Fit / + / - zoom controls alongside the Export dropdown (PNG, JPG, PDF, HTML interactive viewer, JSON)
 
 ### Component structure
 

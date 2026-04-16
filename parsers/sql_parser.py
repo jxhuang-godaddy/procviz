@@ -160,21 +160,24 @@ def _extract_procedure_body(ddl: str) -> tuple[str, int] | None:
     return match.group(1), match.start(1)
 
 
-def _split_statements(body: str) -> list[tuple[str, int]]:
+def _split_statements(body: str) -> list[tuple[str, int, list[int]]]:
     """Split SQL body on semicolons, respecting quoted strings, block and line comments.
 
     Handles all line-ending styles (``\\r\\n``, ``\\r``, ``\\n``).
     Line comments (``--``) are stripped so that patterns like ``--/*``
     don't start a false block comment and commented-out DML is ignored.
 
-    Returns a list of (statement_text, char_offset) tuples where char_offset
-    is the position of the first non-whitespace character in the original body.
+    Returns a list of ``(statement_text, char_offset, pos_map)`` tuples where
+    *char_offset* is the position of the first non-whitespace character in the
+    original body and *pos_map* maps each character index in *statement_text*
+    back to its position in the original (normalised) body.
     """
     # Normalise line endings to \n so line-comment detection works uniformly
     body = body.replace("\r\n", "\n").replace("\r", "\n")
 
-    stmts: list[tuple[str, int]] = []
+    stmts: list[tuple[str, int, list[int]]] = []
     current: list[str] = []
+    cur_pos: list[int] = []  # original body position for each char in current
     stmt_start: int = 0  # character offset of current statement start
     found_content = False  # whether we've seen non-whitespace for this stmt
     in_quote = False
@@ -191,10 +194,12 @@ def _split_statements(body: str) -> list[tuple[str, int]]:
             continue
         elif in_quote:
             current.append(ch)
+            cur_pos.append(i)
             if ch == "'":
                 # Check for escaped quote ('')
                 if i + 1 < len(body) and body[i + 1] == "'":
                     current.append("'")
+                    cur_pos.append(i + 1)
                     i += 2
                     continue
                 in_quote = False
@@ -204,6 +209,7 @@ def _split_statements(body: str) -> list[tuple[str, int]]:
                 found_content = True
             in_quote = True
             current.append(ch)
+            cur_pos.append(i)
         elif ch == "-" and i + 1 < len(body) and body[i + 1] == "-":
             # Line comment — skip to end of line
             i += 2
@@ -215,20 +221,31 @@ def _split_statements(body: str) -> list[tuple[str, int]]:
             i += 2
             continue
         elif ch == ";":
-            text = "".join(current).strip()
-            if text:
-                stmts.append((text, stmt_start))
+            text = "".join(current)
+            stripped = text.strip()
+            if stripped:
+                # Build pos_map for the stripped text (skip leading/trailing ws)
+                lstrip_count = len(text) - len(text.lstrip())
+                rstrip_count = len(text) - len(text.rstrip())
+                end = len(cur_pos) - rstrip_count if rstrip_count else len(cur_pos)
+                stmts.append((stripped, stmt_start, cur_pos[lstrip_count:end]))
             current = []
+            cur_pos = []
             found_content = False
         else:
             if not found_content and not ch.isspace():
                 stmt_start = i
                 found_content = True
             current.append(ch)
+            cur_pos.append(i)
         i += 1
-    trailing = "".join(current).strip()
-    if trailing:
-        stmts.append((trailing, stmt_start))
+    text = "".join(current)
+    stripped = text.strip()
+    if stripped:
+        lstrip_count = len(text) - len(text.lstrip())
+        rstrip_count = len(text) - len(text.rstrip())
+        end = len(cur_pos) - rstrip_count if rstrip_count else len(cur_pos)
+        stmts.append((stripped, stmt_start, cur_pos[lstrip_count:end]))
     return stmts
 
 
@@ -246,18 +263,21 @@ _SKIP_RE = re.compile(
 def _get_dml_statement_list(body: str) -> list[tuple[str, int]]:
     """Extract individual DML statements from a procedure body.
 
-    Returns a list of (sql_text, char_offset) tuples.
+    Returns a list of (sql_text, char_offset) tuples where char_offset is
+    the position of the DML keyword in the *original* (normalised) body.
     Skips SET/DECLARE/procedural statements to avoid matching DML keywords
     inside string literals.
     """
     stmts = _split_statements(body)
     dml: list[tuple[str, int]] = []
-    for s, offset in stmts:
+    for s, _offset, pos_map in stmts:
         if _SKIP_RE.match(s):
             continue
         m = _DML_RE.search(s)
         if m:
-            dml.append((s[m.start():], offset + m.start()))
+            # Use pos_map to translate stripped-text position to original body position
+            original_offset = pos_map[m.start()]
+            dml.append((s[m.start():], original_offset))
     return dml
 
 
@@ -356,21 +376,22 @@ def parse_dataflow(ddl: str) -> DataFlowResult:
     is_proc = _is_procedure_ddl(ddl)
     is_macro = _is_macro_ddl(ddl)
     if is_proc or is_macro:
+        # Normalise line endings FIRST so all offsets (body extraction,
+        # statement splitting, line counting) share the same coordinate system.
+        ddl_norm = ddl.replace("\r\n", "\n").replace("\r", "\n")
+
         if is_proc:
-            result = _extract_procedure_body(ddl)
+            result = _extract_procedure_body(ddl_norm)
             if not result:
                 errors.append("Could not extract procedure body between BEGIN/END")
                 return DataFlowResult(table_refs=table_refs, call_refs=call_refs, errors=errors)
             body, body_offset = result
         else:
-            result = _extract_macro_body(ddl)
+            result = _extract_macro_body(ddl_norm)
             if not result:
                 errors.append("Could not extract macro body between AS ( ... )")
                 return DataFlowResult(table_refs=table_refs, call_refs=call_refs, errors=errors)
             body, body_offset = result
-
-        # Normalise DDL line endings for line-number counting
-        ddl_norm = ddl.replace("\r\n", "\n").replace("\r", "\n")
 
         dml_stmts = _get_dml_statement_list(body)
         step_sql: dict[int, str] = {}

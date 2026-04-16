@@ -69,10 +69,35 @@ export default function App() {
           <>
             <DiagramView ref={diagramRef} graph={graph} onSelect={setDetail} visibility={visibility} />
             <Legend visibility={visibility} onToggle={handleToggle} />
-            <ExportMenu
-              getCy={() => diagramRef.current?.getCy() ?? null}
-              objectName={selection?.name ?? "diagram"}
-            />
+            <div className="absolute top-4 right-4 z-10 flex gap-1.5">
+              <div className="flex bg-white border border-gray-300 rounded shadow-sm text-sm">
+                <button
+                  onClick={() => { const cy = diagramRef.current?.getCy(); if (cy) { cy.fit(undefined, 30); } }}
+                  className="px-2.5 py-1.5 hover:bg-gray-50 border-r border-gray-300"
+                  title="Fit to screen"
+                >
+                  Fit
+                </button>
+                <button
+                  onClick={() => { const cy = diagramRef.current?.getCy(); if (cy) { cy.zoom(cy.zoom() * 1.3); cy.center(); } }}
+                  className="px-2.5 py-1.5 hover:bg-gray-50 border-r border-gray-300"
+                  title="Zoom in"
+                >
+                  +
+                </button>
+                <button
+                  onClick={() => { const cy = diagramRef.current?.getCy(); if (cy) { cy.zoom(cy.zoom() / 1.3); cy.center(); } }}
+                  className="px-2.5 py-1.5 hover:bg-gray-50"
+                  title="Zoom out"
+                >
+                  &minus;
+                </button>
+              </div>
+              <ExportMenu
+                getCy={() => diagramRef.current?.getCy() ?? null}
+                objectName={selection?.name ?? "diagram"}
+              />
+            </div>
           </>
         )}
       </div>

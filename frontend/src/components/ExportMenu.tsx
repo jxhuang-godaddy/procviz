@@ -285,7 +285,7 @@ export default function ExportMenu({ getCy, objectName }: ExportMenuProps) {
   }
 
   return (
-    <div ref={menuRef} className="absolute top-4 right-4 z-10">
+    <div ref={menuRef} className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
         className="bg-white border border-gray-300 rounded px-3 py-1.5 text-sm shadow-sm hover:bg-gray-50 flex items-center gap-1.5"

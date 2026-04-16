@@ -145,16 +145,54 @@ function formatSql(sql: string): string {
     .trim();
 }
 
-function SqlBlock({ sql }: { sql: string }) {
-  const tokens = useMemo(() => tokenizeSql(formatSql(sql)), [sql]);
+function SqlBlock({ sql, preserveLines = false }: { sql: string; preserveLines?: boolean }) {
+  const tokens = useMemo(() => tokenizeSql(preserveLines ? sql.replace(/\r\n/g, "\n").replace(/\r/g, "\n") : formatSql(sql)), [sql, preserveLines]);
+
+  const lines = useMemo(() => {
+    const result: Token[][] = [[]];
+    for (const tok of tokens) {
+      if (tok.value.includes("\n")) {
+        const parts = tok.value.split("\n");
+        if (parts[0]) result[result.length - 1].push({ type: tok.type, value: parts[0] });
+        for (let j = 1; j < parts.length; j++) {
+          result.push([]);
+          if (parts[j]) result[result.length - 1].push({ type: tok.type, value: parts[j] });
+        }
+      } else {
+        result[result.length - 1].push(tok);
+      }
+    }
+    return result;
+  }, [tokens]);
+
+  const gutterW = `${String(lines.length).length + 1}ch`;
+
   return (
-    <pre className="bg-gray-50 border border-gray-200 rounded p-4 text-xs font-mono whitespace-pre-wrap break-words overflow-auto flex-1 min-h-0 leading-relaxed">
-      {tokens.map((tok, i) =>
-        tok.type === "ws"
-          ? tok.value
-          : <span key={i} style={TOKEN_STYLE[tok.type]}>{tok.value}</span>,
-      )}
-    </pre>
+    <div className="bg-gray-50 border border-gray-200 rounded text-xs font-mono overflow-auto flex-1 min-h-0">
+      <table className="border-collapse w-full">
+        <tbody>
+          {lines.map((lineTokens, idx) => (
+            <tr key={idx} className="leading-relaxed">
+              <td
+                className="select-none text-right text-gray-400 pr-3 pl-2 align-top border-r border-gray-200"
+                style={{ minWidth: gutterW }}
+              >
+                {idx + 1}
+              </td>
+              <td className="pl-3 pr-4 whitespace-pre-wrap break-words">
+                {lineTokens.length === 0
+                  ? "\u00a0"
+                  : lineTokens.map((tok, i) =>
+                      tok.type === "ws"
+                        ? tok.value
+                        : <span key={i} style={TOKEN_STYLE[tok.type]}>{tok.value}</span>,
+                    )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -408,7 +446,7 @@ function ProcNodeModal({ node, onClose, onHeaderMouseDown }: { node: CytoscapeNo
         onMouseDown={onHeaderMouseDown}
       />
       <div className="p-5 flex-1 min-h-0 flex flex-col overflow-hidden">
-        {ddl ? <SqlBlock sql={ddl} /> : (
+        {ddl ? <SqlBlock sql={ddl} preserveLines /> : (
           <div className="text-gray-400 text-sm">DDL not available for this {typeLabel.toLowerCase()}.</div>
         )}
       </div>
@@ -472,7 +510,7 @@ function TableNodeModal({ node, onClose, onHeaderMouseDown, graph }: { node: Cyt
       <div className="p-5 flex-1 min-h-0 flex flex-col overflow-hidden">
         {loading && <div className="text-gray-400 text-sm">Loading DDL...</div>}
         {error && <div className="text-red-500 text-sm">Error: {error}</div>}
-        {ddl && !loading && <SqlBlock sql={ddl} />}
+        {ddl && !loading && <SqlBlock sql={ddl} preserveLines />}
       </div>
     </>
   );
