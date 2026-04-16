@@ -14,21 +14,25 @@ VALID_OBJECT_TYPES = {"procedure", "macro", "table", "view"}
 # In-memory caches: database -> {obj_name: ...}
 _dataflow_cache: dict[str, dict[str, DataFlowResult]] = {}
 _ddl_cache: dict[str, dict[str, str]] = {}
+_db_fully_scanned: set[str] = set()
 
 
 def _ensure_db_cached(db: str) -> None:
     """Parse all procedures/macros in a database, caching dataflow + DDL."""
-    if db in _dataflow_cache:
+    if db in _db_fully_scanned:
         return
-    _dataflow_cache[db] = {}
-    _ddl_cache[db] = {}
+    _dataflow_cache.setdefault(db, {})
+    _ddl_cache.setdefault(db, {})
     for otype in ("procedure", "macro"):
         objects = teradata.get_objects(db, otype)
         for obj in objects:
+            if obj.name in _dataflow_cache[db]:
+                continue
             ddl = teradata.get_ddl(db, obj.name)
             if ddl:
                 _ddl_cache[db][obj.name] = ddl
                 _dataflow_cache[db][obj.name] = parse_dataflow(ddl)
+    _db_fully_scanned.add(db)
 
 
 @router.get("/databases")
@@ -79,6 +83,7 @@ def _forward_dataflow(db: str, name: str, object_type: str) -> GraphResponse:
 
     # Cache for reverse lookups
     _dataflow_cache.setdefault(db, {})[name] = dataflow
+    _ddl_cache.setdefault(db, {})[name] = ddl
 
     parameters = teradata.get_parameters(db, name)
     detail_data = {
