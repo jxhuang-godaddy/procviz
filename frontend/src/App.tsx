@@ -71,6 +71,14 @@ export default function App() {
           <>
             <DiagramView ref={diagramRef} graph={graph} onSelect={setDetail} onNavigate={handleSelect} visibility={visibility} />
             <Legend visibility={visibility} onToggle={handleToggle} />
+            {selection && (
+              <div className="absolute top-4 left-4 z-10 bg-white/90 border border-gray-200 rounded shadow-sm px-3 py-1.5 text-sm">
+                <span className="font-semibold text-gray-800">{selection.db}</span>
+                <span className="text-gray-400 mx-1.5">/</span>
+                <span className="text-gray-600">{selection.name}</span>
+                <span className="text-gray-400 ml-1.5 text-xs">({selection.objectType})</span>
+              </div>
+            )}
             <div className="absolute top-4 right-4 z-10 flex gap-1.5">
               <div className="flex bg-white border border-gray-300 rounded shadow-sm text-sm">
                 <button
