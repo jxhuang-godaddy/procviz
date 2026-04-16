@@ -17,7 +17,7 @@ if [ -d "$INSTALL_DIR" ]; then
     cd "$INSTALL_DIR" && git pull
 else
     echo "Cloning ProcViz..."
-    git clone https://github.com/your-org/procviz.git "$INSTALL_DIR"
+    git clone https://github.com/jxhuang-godaddy/procviz.git "$INSTALL_DIR"
     cd "$INSTALL_DIR"
 fi
 

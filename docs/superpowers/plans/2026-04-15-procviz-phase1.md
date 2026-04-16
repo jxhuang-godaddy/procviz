@@ -2367,7 +2367,7 @@ if [ -d "$INSTALL_DIR" ]; then
     cd "$INSTALL_DIR" && git pull
 else
     echo "Cloning ProcViz..."
-    git clone https://github.com/your-org/procviz.git "$INSTALL_DIR"
+    git clone https://github.com/jxhuang-godaddy/procviz.git "$INSTALL_DIR"
     cd "$INSTALL_DIR"
 fi
 
@@ -2419,7 +2419,7 @@ if (Test-Path $InstallDir) {
     git pull
 } else {
     Write-Host "Cloning ProcViz..."
-    git clone https://github.com/your-org/procviz.git $InstallDir
+    git clone https://github.com/jxhuang-godaddy/procviz.git $InstallDir
     Push-Location $InstallDir
 }
 
@@ -2464,12 +2464,12 @@ Interactive data flow diagrams for Teradata stored procedures, macros, tables, a
 
 ### Mac/Linux
 ```bash
-curl -fsSL https://raw.githubusercontent.com/your-org/procviz/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/jxhuang-godaddy/procviz/main/install.sh | sh
 ```
 
 ### Windows (PowerShell)
 ```powershell
-irm https://raw.githubusercontent.com/your-org/procviz/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/jxhuang-godaddy/procviz/main/install.ps1 | iex
 ```
 
 ## Manual Setup

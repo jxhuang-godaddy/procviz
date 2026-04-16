@@ -1,8 +1,9 @@
-import { useCallback, useState } from "react";
+import { useRef, useState } from "react";
 import TreeSidebar from "./components/TreeSidebar";
-import DiagramView from "./components/DiagramView";
-import DetailPanel from "./components/DetailPanel";
+import DiagramView, { type DiagramHandle } from "./components/DiagramView";
+import DetailModal from "./components/DetailModal";
 import Legend from "./components/Legend";
+import ExportMenu from "./components/ExportMenu";
 import { useDataflow } from "./hooks/useDataflow";
 import type { CytoscapeEdgeData, CytoscapeNodeData, ObjectType } from "./types/graph";
 
@@ -12,10 +13,15 @@ interface Selection {
   name: string;
 }
 
+export type DetailSelection =
+  | { kind: "node"; data: CytoscapeNodeData }
+  | { kind: "edge"; data: CytoscapeEdgeData }
+  | null;
+
 export default function App() {
   const [selection, setSelection] = useState<Selection | null>(null);
-  const [selectedNode, setSelectedNode] = useState<CytoscapeNodeData | null>(null);
-  const [selectedEdge, setSelectedEdge] = useState<CytoscapeEdgeData | null>(null);
+  const [detail, setDetail] = useState<DetailSelection>(null);
+  const diagramRef = useRef<DiagramHandle>(null);
 
   const { graph, loading, error } = useDataflow(
     selection?.db ?? null,
@@ -25,19 +31,8 @@ export default function App() {
 
   function handleSelect(db: string, objectType: ObjectType, name: string) {
     setSelection({ db, objectType, name });
-    setSelectedNode(null);
-    setSelectedEdge(null);
+    setDetail(null);
   }
-
-  const handleSelectNode = useCallback((node: CytoscapeNodeData | null) => {
-    setSelectedNode(node);
-    setSelectedEdge(null);
-  }, []);
-
-  const handleSelectEdge = useCallback((edge: CytoscapeEdgeData | null) => {
-    setSelectedEdge(edge);
-    setSelectedNode(null);
-  }, []);
 
   return (
     <div className="flex h-screen bg-gray-50 text-gray-900">
@@ -61,17 +56,17 @@ export default function App() {
         )}
         {graph && !loading && (
           <>
-            <DiagramView
-              graph={graph}
-              onSelectNode={handleSelectNode}
-              onSelectEdge={handleSelectEdge}
-            />
+            <DiagramView ref={diagramRef} graph={graph} onSelect={setDetail} />
             <Legend />
+            <ExportMenu
+              getCy={() => diagramRef.current?.getCy() ?? null}
+              objectName={selection?.name ?? "diagram"}
+            />
           </>
         )}
       </div>
 
-      <DetailPanel node={selectedNode} edge={selectedEdge} />
+      <DetailModal detail={detail} onClose={() => setDetail(null)} graph={graph} />
     </div>
   );
 }

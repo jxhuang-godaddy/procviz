@@ -18,6 +18,8 @@ class DataFlowResult(BaseModel):
     table_refs: list[TableRef]
     call_refs: list[CallRef]
     errors: list[str]
+    step_sql: dict[int, str] = {}  # step number → raw SQL text
+    volatile_tables: set[str] = set()  # names of CREATE VOLATILE TABLE targets
 
 
 # --- Connector output ---
@@ -55,6 +57,7 @@ class CytoscapeEdge(BaseModel):
     type: str
     step: str
     label: str
+    hidden: bool = False
 
 
 class GraphResponse(BaseModel):

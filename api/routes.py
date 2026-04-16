@@ -43,6 +43,13 @@ def get_dataflow(db: str, object_type: str, name: str) -> GraphResponse:
     return _forward_dataflow(db, name, object_type)
 
 
+@router.get("/ddl/{db}/{name}")
+def get_ddl_text(db: str, name: str) -> dict:
+    """Return raw DDL text for any database object."""
+    ddl = teradata.get_ddl(db, name)
+    return {"ddl": ddl}
+
+
 def _forward_dataflow(db: str, name: str, object_type: str) -> GraphResponse:
     """Build data flow graph for a procedure or macro."""
     ddl = teradata.get_ddl(db, name)
@@ -57,7 +64,7 @@ def _forward_dataflow(db: str, name: str, object_type: str) -> GraphResponse:
     parameters = teradata.get_parameters(db, name)
     detail_data = {
         "parameters": [p.model_dump() for p in parameters],
-        "sql_snippets": {},
+        "ddl": ddl,
     }
 
     return build_dataflow_graph(name, object_type, dataflow, detail_data)

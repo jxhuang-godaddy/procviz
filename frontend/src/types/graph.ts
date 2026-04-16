@@ -1,7 +1,7 @@
 export interface CytoscapeNodeData {
   id: string;
   label: string;
-  type: "proc" | "macro" | "table" | "caller";
+  type: "proc" | "macro" | "table" | "volatile" | "caller" | "step";
   detail: Record<string, unknown>;
 }
 
@@ -11,6 +11,7 @@ export interface CytoscapeEdgeData {
   type: "read" | "write" | "call";
   step: string;
   label: string;
+  hidden?: boolean;
 }
 
 export interface GraphResponse {

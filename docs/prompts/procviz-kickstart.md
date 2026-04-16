@@ -1,0 +1,1 @@
+Use this brief `docs/summaries/procviz-project-summary.md` to scaffold Phase 1 of Procviz — FastAPI skeleton, Teradata connector, sqlglot parsing for data flow, and the React + Cytoscape.js frontend. Start with the repo structure and pyproject.toml.

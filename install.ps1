@@ -14,7 +14,7 @@ if (Test-Path $InstallDir) {
     git pull
 } else {
     Write-Host "Cloning ProcViz..."
-    git clone https://github.com/your-org/procviz.git $InstallDir
+    git clone https://github.com/jxhuang-godaddy/procviz.git $InstallDir
     Push-Location $InstallDir
 }
 

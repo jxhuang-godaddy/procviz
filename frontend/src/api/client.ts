@@ -33,3 +33,10 @@ export function getDataflow(
     `${BASE}/databases/${encodeURIComponent(db)}/${encodeURIComponent(objectType)}/${encodeURIComponent(name)}/dataflow`
   );
 }
+
+export async function getDdl(db: string, name: string): Promise<string> {
+  const resp = await fetchJson<{ ddl: string }>(
+    `${BASE}/ddl/${encodeURIComponent(db)}/${encodeURIComponent(name)}`
+  );
+  return resp.ddl;
+}

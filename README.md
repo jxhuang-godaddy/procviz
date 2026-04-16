@@ -6,12 +6,12 @@ Interactive data flow diagrams for Teradata stored procedures, macros, tables, a
 
 ### Mac/Linux
 ```bash
-curl -fsSL https://raw.githubusercontent.com/your-org/procviz/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/jxhuang-godaddy/procviz/main/install.sh | sh
 ```
 
 ### Windows (PowerShell)
 ```powershell
-irm https://raw.githubusercontent.com/your-org/procviz/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/jxhuang-godaddy/procviz/main/install.ps1 | iex
 ```
 
 ## Manual Setup
